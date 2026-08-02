@@ -11,10 +11,12 @@ Natural keys used for idempotency, where the spec's DDL doesn't define one:
 - result: PRIMARY KEY(comp_event_id, entry_id) -- defined in schema.
 - mark: UNIQUE(round_id, entry_id, judge_person_id, dance) -- defined in schema.
 
-Solo comp_events (no partner) are skipped: the spec's schema models the
-partnership as the competing unit with entry.partnership_id required, and has
-no representation for a lone competitor. Flagged as a follow-up rather than
-worked around unilaterally.
+Solo comp_events (no partner) use a degenerate partnership with kind='solo'
+and follower_id=NULL, since the spec's schema models the partnership as the
+competing unit and has no other slot for a lone competitor. 'solo' isn't
+listed among the spec's example kind values (amateur|pro_am|professional|
+formation) but nothing constrains the column to that list, and this keeps
+solo results queryable through the same partnership/entry/result path.
 """
 from __future__ import annotations
 
@@ -146,11 +148,8 @@ def load_ranking_page(
 ) -> dict[str, Entry]:
     """Load rounds + entries + results. Returns competitor_no -> Entry for mark loading.
 
-    Skips solo entries (page.is_solo) -- see module docstring.
+    Solo entries (page.is_solo) load via a kind='solo' partnership -- see module docstring.
     """
-    if page.is_solo:
-        return {}
-
     for staging_round in page.rounds:
         _load_round(session, comp_event, staging_round)
 
@@ -159,10 +158,19 @@ def load_ranking_page(
 
     for staging_entry in page.entries:
         if not staging_entry.competitor_no:
-            continue  # excused couple: no result to attach, not a competing entry this round
+            continue  # excused entry: no result to attach, not a competing entry this round
         leader = resolve_person(session, source=source, ref=staging_entry.partner_1, country=staging_entry.country)
-        follower = resolve_person(session, source=source, ref=staging_entry.partner_2, country=staging_entry.country)
-        partnership = resolve_partnership(session, leader=leader, follower=follower, kind="amateur")
+        if staging_entry.partner_2 is not None:
+            follower = resolve_person(
+                session,
+                source=source,
+                ref=staging_entry.partner_2,
+                country=staging_entry.country,
+                partner_person_ids=frozenset({leader.id}),
+            )
+            partnership = resolve_partnership(session, leader=leader, follower=follower, kind="amateur")
+        else:
+            partnership = resolve_partnership(session, leader=leader, follower=None, kind="solo")
         entry = _load_entry(session, competition, partnership.id, staging_entry.competitor_no)
         entry_by_competitor_no[staging_entry.competitor_no] = entry
 

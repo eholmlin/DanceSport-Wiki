@@ -106,6 +106,40 @@ def test_pipeline_is_idempotent_on_rerun(tmp_path):
     assert counts_after_first == counts_after_second
 
 
+def test_solo_event_loads_via_degenerate_partnership(tmp_path):
+    engine = init_db(tmp_path / "solo.sqlite3")
+    session = get_session(engine)
+
+    event_html = (FIXTURES / "event_taipei_2026.html").read_bytes()
+    competition_staging, comp_event_refs = parse_event_page(event_html, EVENT_URL)
+    competition = load_competition(session, competition_staging)
+    ref = next(r for r in comp_event_refs if r.source_code == "Open-Taipei-Adult-Solo-Latin-Female-66543")
+    comp_event = load_comp_event(session, competition, ref)
+
+    ranking_page = parse_ranking_page((FIXTURES / "ranking_taipei_adult_solo_latin_female_2026.html").read_bytes())
+    assert ranking_page.is_solo is True
+    entry_by_competitor_no = load_ranking_page(session, "wdsf", competition, comp_event, ranking_page)
+    session.commit()
+
+    assert len(entry_by_competitor_no) == 32
+    winner_entry = entry_by_competitor_no["255"]
+    partnership = session.get(Partnership, winner_entry.partnership_id)
+    assert partnership.kind == "solo"
+    assert partnership.follower_id is None
+    leader = session.get(Person, partnership.leader_id)
+    assert leader.display_name == "Geoi Ree Gyn"
+
+    result = session.get(Result, {"comp_event_id": comp_event.id, "entry_id": winner_entry.id})
+    assert (result.placement_low, result.placement_high) == (1, 1)
+
+    # re-running must not create a second partnership/entry for the same solo athlete
+    entry_by_competitor_no_2 = load_ranking_page(session, "wdsf", competition, comp_event, ranking_page)
+    session.commit()
+    assert entry_by_competitor_no_2["255"].id == winner_entry.id
+    all_solo_partnerships = session.scalars(select(Partnership).where(Partnership.kind == "solo")).all()
+    assert len(all_solo_partnerships) == 32
+
+
 def _table_counts(session):
     from dsr.models import CompEvent, Competition, Mark, Person, Result, Round
 
