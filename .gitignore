@@ -1,0 +1,13 @@
+.venv/
+.claude/settings.local.json
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+data/raw/
+*.db
+*.sqlite
+*.sqlite3
+.DS_Store

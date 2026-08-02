@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "defaultMode": "auto",
+    "allow": [
+      "mcp__Claude_Browser__read_page",
+      "mcp__Claude_Browser__get_page_text",
+      "Bash(mkdir -p*)"
+    ]
+  }
+}
