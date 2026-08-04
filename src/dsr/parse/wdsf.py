@@ -367,11 +367,13 @@ def parse_marks_page(html: bytes) -> list[StagingMark]:
             continue  # rank-only or unexpected row; nothing to extract
         if current_competitor_no is None:
             raise ParseError("marks row has round data but no competitor number seen yet")
+        # Use the label verbatim (e.g. "1. Round", "Redance") rather than
+        # extracting a number from it -- not every round shown here has a
+        # numbered label, and this label is later matched against the same
+        # StagingRound.round_type text produced by parse_ranking_page (or, for
+        # labels with no corresponding ranking-page section such as a
+        # tie-break Redance, used to create one on the fly at load time).
         round_label = round_cell.attributes.get("title") or _clean_ws(_text(round_cell))
-        round_order = None
-        rm = re.match(r"^(\d+)\.\s*Round$", round_label)
-        if rm:
-            round_order = int(rm.group(1))
 
         # NB: a combined selector ("td[data-info], td.dSum") returns all matches of
         # the first branch before any of the second, not in document order -- so
@@ -389,7 +391,7 @@ def parse_marks_page(html: bytes) -> list[StagingMark]:
                 value = _clean_ws(_text(cell))
                 marks.append(
                     StagingMark(
-                        round_order=round_order,
+                        round_label=round_label,
                         competitor_no=current_competitor_no,
                         judge_letter=letter,
                         dance=dance_name,
@@ -434,7 +436,7 @@ def parse_final_page(html: bytes) -> list[StagingMark]:
             placement = int(text) if text.isdigit() else None
             marks.append(
                 StagingMark(
-                    round_order=None,
+                    round_label="final",  # matches the normalized round_type parse_ranking_page assigns the Final section
                     competitor_no=competitor_no,
                     judge_letter=letter,
                     dance=None,

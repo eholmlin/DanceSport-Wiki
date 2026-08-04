@@ -144,7 +144,7 @@ def test_marks_page_large_field():
     # (round1 entries=19 + round2 entries=12) couple-rounds * 5 dances * 11 judges
     assert len(marks) == (19 + 12) * 5 * 11
 
-    winner_round1 = [m for m in marks if m.competitor_no == "19" and m.round_order == 1]
+    winner_round1 = [m for m in marks if m.competitor_no == "19" and m.round_label == "1. Round"]
     assert len(winner_round1) == 5 * 11
     assert {m.dance for m in winner_round1} == {"Samba", "Cha Cha Cha", "Rumba", "Paso Doble", "Jive"}
     assert all(m.recalled is not None for m in winner_round1)  # every cell resolves to True/False, never unknown
@@ -185,7 +185,7 @@ def test_final_page_one_row_per_judge_per_couple():
     winner_marks = [m for m in marks if m.competitor_no == "19"]
     assert len(winner_marks) == 11
     assert all(m.dance is None for m in winner_marks)  # combined placement, not per-dance
-    assert all(m.round_order is None for m in winner_marks)
+    assert all(m.round_label == "final" for m in winner_marks)
     assert {m.placement for m in winner_marks} <= set(range(1, 7))
 
 

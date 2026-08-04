@@ -137,6 +137,13 @@ class Competition(Base):
     country: Mapped[Optional[str]]
     sanctioning_body: Mapped[Optional[str]]  # 'USA Dance' | 'NDCA' | 'WDSF' | 'collegiate'
     url: Mapped[Optional[str]]
+    # Source's own "results last (re)published" timestamp, when the source
+    # exposes one (NDCA Premier's compyears feed does; WDSF's pages don't, so
+    # this stays NULL there). Lets an incremental refresh cheaply tell "did
+    # this competition's results change since we last loaded it" from one
+    # lightweight per-season listing call, without re-fetching every roster
+    # every time -- see scripts/refresh_ndca.py.
+    source_updated_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
 
 
 class CompEvent(Base):

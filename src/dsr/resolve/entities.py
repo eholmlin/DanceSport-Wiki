@@ -89,9 +89,19 @@ def resolve_person(
         )
         return person
 
-    # Steps 3-5: fuzzy blocking/scoring fallback.
-    candidates = find_candidates(
-        session, name=ref.name, source=source, country=country, partner_person_ids=partner_person_ids
+    # Steps 3-5 (fuzzy blocking/scoring) only apply when there's no external_ref
+    # at all. A *present-but-unmatched* external_ref isn't ambiguous -- it's a
+    # source-issued id we've simply never seen before, and since it's unique
+    # per athlete forever, that alone conclusively means this is a new person.
+    # Skipping this check was a real bug: nearly every athlete's *first*
+    # appearance in the data has an external_ref that (by definition) matches
+    # no one yet, so without this guard almost every new person ran the fuzzy
+    # gauntlet anyway and picked up spurious resolution_queue entries against
+    # unrelated people who merely shared a surname or blocking key.
+    candidates = (
+        []
+        if ref.external_ref
+        else find_candidates(session, name=ref.name, source=source, country=country, partner_person_ids=partner_person_ids)
     )
     top = candidates[0] if candidates else None
 

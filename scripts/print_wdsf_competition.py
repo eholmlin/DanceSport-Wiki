@@ -39,11 +39,8 @@ def main() -> None:
 
     recall_marks = parse_marks_page((FIXTURES / "marks_taipei_adult_latin_2026.html").read_bytes())
     final_marks = parse_final_page((FIXTURES / "final_taipei_adult_latin_2026.html").read_bytes())
-    final_round_order = max(r.round_order for r in ranking_page.rounds)
-    load_marks(session, comp_event, entry_by_competitor_no, letter_to_person_id, recall_marks, final_round_order=None)
-    load_marks(
-        session, comp_event, entry_by_competitor_no, letter_to_person_id, final_marks, final_round_order=final_round_order
-    )
+    load_marks(session, comp_event, entry_by_competitor_no, letter_to_person_id, recall_marks)
+    load_marks(session, comp_event, entry_by_competitor_no, letter_to_person_id, final_marks)
     session.commit()
 
     print(f"{competition.name} -- {comp_event.raw_title} ({competition.start_date} to {competition.end_date})\n")

@@ -1,0 +1,39 @@
+{
+    "Status": 1,
+    "Events": [
+        {
+            "Competition_ID": 167,
+            "competition_id": 167,
+            "Comp_Year_ID": 1612,
+            "compyear_id": 1612,
+            "Competition_Name": "Austin Star Ball",
+            "Comp_Year_Name": "Austin Star Ball",
+            "Organizers": "Alexander Romanov and Anna Blagodyreva",
+            "Website": "https:\/\/www.austinstarball.com\/",
+            "Comp_Year": 2025,
+            "Start_Date": "01\/11\/2025",
+            "End_Date": "01\/11\/2025",
+            "Date_Range": "Jan 11, 2025",
+            "Entry_Deadline": "12\/19\/2024",
+            "Hotel_Deadline": null,
+            "Active": 1,
+            "Approved_Location": [
+                "Austin",
+                "TX"
+            ],
+            "Publish_Heatlists": 1,
+            "Publish_Results": 1,
+            "Publish_Program": 1,
+            "Publish_Program_Entries": 1,
+            "Publish_Program_Results": 1,
+            "Is_Current": 0,
+            "Backup_Exists": 0,
+            "Merge_Files": [],
+            "Publish_Dates": {
+                "Heatlists": "2025-01-11 07:51:02 pm",
+                "Results": "2025-01-11 07:51:06 pm",
+                "Program": "2025-01-11 07:51:04 pm"
+            }
+        }
+    ]
+}

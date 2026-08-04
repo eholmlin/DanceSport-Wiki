@@ -27,6 +27,7 @@ class StagingCompetition:
     country: Optional[str]
     sanctioning_body: Optional[str]
     url: str
+    source_updated_at: Optional[dt.datetime] = None  # only NDCA populates this; see models.Competition
 
 
 @dataclass
@@ -85,7 +86,7 @@ class StagingOfficial:
 
 @dataclass
 class StagingMark:
-    round_order: Optional[int]  # None for the aggregated final-round page
+    round_label: str  # e.g. "1. Round", "Redance", or "final" for the Final page
     competitor_no: str
     judge_letter: str
     dance: Optional[str]  # None when the source only publishes a combined placement

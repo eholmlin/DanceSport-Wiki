@@ -3,7 +3,12 @@
 Natural keys used for idempotency, where the spec's DDL doesn't define one:
 - competition: UNIQUE(source, source_code) -- defined in schema.
 - comp_event: UNIQUE(competition_id, raw_title) -- defined in schema.
-- round: no DB constraint; (comp_event_id, round_order) used here as the key.
+- round: no DB constraint; (comp_event_id, round_type) used here as the key --
+  not round_order, because round_order is a derived sequence position and
+  some rounds (e.g. a "Redance" tie-break) only appear on the Marks page with
+  no corresponding Ranking-page section to derive an order from. Such rounds
+  are created on the fly by load_marks with a round_order appended after
+  whatever the Ranking page did establish (see _get_or_create_round_by_label).
 - entry: no DB constraint; (competition_id, partnership_id) used here as the
   key. Known limitation (see docs/wdsf-format-notes.md): a partnership entered
   in more than one comp_event at the same competition shares one entry row, so
@@ -55,6 +60,18 @@ def load_competition(session: Session, staging: StagingCompetition) -> Competiti
         select(Competition).where(Competition.source == staging.source, Competition.source_code == staging.source_code)
     )
     if existing is not None:
+        # Refresh mutable fields on every call, not just at creation -- in
+        # particular source_updated_at, which an incremental refresh (see
+        # scripts/refresh_ndca.py) needs to reflect the source's *current*
+        # publish timestamp so it can detect the next revision too.
+        existing.name = staging.name
+        existing.start_date = staging.start_date
+        existing.end_date = staging.end_date
+        existing.city = staging.city
+        existing.country = staging.country
+        existing.url = staging.url
+        if staging.source_updated_at is not None:
+            existing.source_updated_at = staging.source_updated_at
         return existing
     competition = Competition(
         source=staging.source,
@@ -66,6 +83,7 @@ def load_competition(session: Session, staging: StagingCompetition) -> Competiti
         country=staging.country,
         sanctioning_body=staging.sanctioning_body,
         url=staging.url,
+        source_updated_at=staging.source_updated_at,
     )
     session.add(competition)
     session.flush()
@@ -90,12 +108,12 @@ def load_comp_event(session: Session, competition: Competition, ref: StagingComp
 
 def _load_round(session: Session, comp_event: CompEvent, staging_round) -> Round:
     existing = session.scalar(
-        select(Round).where(Round.comp_event_id == comp_event.id, Round.round_order == staging_round.round_order)
+        select(Round).where(Round.comp_event_id == comp_event.id, Round.round_type == staging_round.round_type)
     )
     if existing is not None:
         existing.entries_in = staging_round.entries_in
         existing.recalled_count = staging_round.recalled_count
-        existing.round_type = staging_round.round_type
+        existing.round_order = staging_round.round_order
         return existing
     round_row = Round(
         comp_event_id=comp_event.id,
@@ -103,6 +121,44 @@ def _load_round(session: Session, comp_event: CompEvent, staging_round) -> Round
         round_order=staging_round.round_order,
         entries_in=staging_round.entries_in,
         recalled_count=staging_round.recalled_count,
+    )
+    session.add(round_row)
+    session.flush()
+    return round_row
+
+
+def _get_or_create_round_by_label(session: Session, comp_event: CompEvent, round_label: str) -> Round:
+    """Used by load_marks for round labels the Ranking page never listed as
+    its own section (e.g. a tie-break "Redance"). Its true chronological slot
+    among the numbered rounds isn't recoverable from what the page tells us,
+    so this is a best-effort position -- but "final has the highest
+    round_order" is preserved deliberately, since spec's rating weighting
+    depends on final outranking every prelim round (section 5: "final > semi
+    > prelim")."""
+    existing = session.scalar(
+        select(Round).where(Round.comp_event_id == comp_event.id, Round.round_type == round_label)
+    )
+    if existing is not None:
+        return existing
+
+    final_round = session.scalar(
+        select(Round).where(Round.comp_event_id == comp_event.id, Round.round_type == "final")
+    )
+    if final_round is not None:
+        new_order = final_round.round_order
+        final_round.round_order += 1
+    else:
+        max_order = session.scalar(
+            select(Round.round_order).where(Round.comp_event_id == comp_event.id).order_by(Round.round_order.desc())
+        )
+        new_order = (max_order or 0) + 1
+
+    round_row = Round(
+        comp_event_id=comp_event.id,
+        round_type=round_label,
+        round_order=new_order,
+        entries_in=None,
+        recalled_count=None,
     )
     session.add(round_row)
     session.flush()
@@ -202,53 +258,61 @@ def load_marks(
     entry_by_competitor_no: dict[str, Entry],
     judge_letter_to_person_id: dict[str, int],
     marks: list[StagingMark],
-    *,
-    final_round_order: int | None,
 ) -> int:
     """Load StagingMark rows (from either the recall Marks page or the Final page).
 
-    marks with round_order=None (the Final page's combined placement) are
-    attached to `final_round_order`, the round_order already assigned to that
-    comp_event's "final" StagingRound during ranking-page load.
+    Rounds are resolved by label (round_label), auto-creating one if this
+    label had no corresponding Ranking-page section -- see
+    _get_or_create_round_by_label.
+
+    Existing marks are batch-fetched once per call (one query per involved
+    round, via the round_id IN (...) which the UNIQUE(round_id, entry_id,
+    judge_person_id, dance) constraint indexes) rather than one SELECT per
+    mark. At ~3M total marks, one-query-per-mark was the dominant cost of the
+    whole load/reprocess pipeline -- an event with 11 judges x 5 dances is 55
+    marks, i.e. 55 round-trips that are now 1.
     """
-    rounds_by_order = {
-        r.round_order: r for r in session.scalars(select(Round).where(Round.comp_event_id == comp_event.id))
+    rounds_by_label = {
+        r.round_type: r for r in session.scalars(select(Round).where(Round.comp_event_id == comp_event.id))
     }
+    for label in {m.round_label for m in marks} - rounds_by_label.keys():
+        rounds_by_label[label] = _get_or_create_round_by_label(session, comp_event, label)
+
+    round_ids = [r.id for r in rounds_by_label.values()]
+    existing_by_key: dict[tuple, Mark] = {}
+    if round_ids:
+        for existing_mark in session.scalars(select(Mark).where(Mark.round_id.in_(round_ids))):
+            existing_by_key[(existing_mark.round_id, existing_mark.entry_id, existing_mark.judge_person_id, existing_mark.dance)] = (
+                existing_mark
+            )
 
     loaded = 0
     for staging_mark in marks:
-        round_order = staging_mark.round_order if staging_mark.round_order is not None else final_round_order
-        round_row = rounds_by_order.get(round_order)
+        round_row = rounds_by_label[staging_mark.round_label]
         entry = entry_by_competitor_no.get(staging_mark.competitor_no)
         judge_person_id = judge_letter_to_person_id.get(staging_mark.judge_letter)
-        if round_row is None or entry is None or judge_person_id is None:
+        if entry is None or judge_person_id is None:
             raise ValueError(
-                f"mark references unknown round/entry/judge: round_order={round_order!r} "
+                f"mark references unknown entry/judge: round_label={staging_mark.round_label!r} "
                 f"competitor_no={staging_mark.competitor_no!r} judge_letter={staging_mark.judge_letter!r}"
             )
 
-        existing = session.scalar(
-            select(Mark).where(
-                Mark.round_id == round_row.id,
-                Mark.entry_id == entry.id,
-                Mark.judge_person_id == judge_person_id,
-                Mark.dance.is_(None) if staging_mark.dance is None else Mark.dance == staging_mark.dance,
-            )
-        )
+        key = (round_row.id, entry.id, judge_person_id, staging_mark.dance)
+        existing = existing_by_key.get(key)
         if existing is not None:
             existing.recalled = staging_mark.recalled
             existing.placement = staging_mark.placement
             continue
-        session.add(
-            Mark(
-                round_id=round_row.id,
-                entry_id=entry.id,
-                judge_person_id=judge_person_id,
-                dance=staging_mark.dance,
-                recalled=staging_mark.recalled,
-                placement=staging_mark.placement,
-            )
+        new_mark = Mark(
+            round_id=round_row.id,
+            entry_id=entry.id,
+            judge_person_id=judge_person_id,
+            dance=staging_mark.dance,
+            recalled=staging_mark.recalled,
+            placement=staging_mark.placement,
         )
+        session.add(new_mark)
+        existing_by_key[key] = new_mark  # dedupe correctly against dupes within this same call too
         loaded += 1
     session.flush()
     return loaded

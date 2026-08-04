@@ -1,5 +1,6 @@
 .venv/
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
 __pycache__/
 *.pyc
 *.egg-info/
@@ -7,6 +8,7 @@ __pycache__/
 .coverage
 htmlcov/
 data/raw/
+data/.ndca_reprocess_checkpoint
 *.db
 *.sqlite
 *.sqlite3

@@ -33,9 +33,16 @@ def resolve_database_url(db_path_or_url: Path | str | None = None) -> str:
 
 def get_engine(db_path: Path | str | None = None):
     url = resolve_database_url(db_path)
+    connect_args = {}
     if url.startswith("sqlite:///"):
         Path(url[len("sqlite:///") :]).parent.mkdir(parents=True, exist_ok=True)
-    return create_engine(url, future=True)
+        # A busy writer (e.g. two loader scripts run concurrently) otherwise
+        # raises "database is locked" immediately instead of waiting -- this
+        # happened for real running two bulk-load scripts against the same
+        # file at once. 30s is generous enough for a commit to clear even
+        # under load; each individual commit here is small.
+        connect_args["timeout"] = 30
+    return create_engine(url, future=True, connect_args=connect_args)
 
 
 def init_db(db_path: Path | str | None = None):

@@ -40,19 +40,9 @@ def _run_pipeline_once(session):
 
     recall_marks = parse_marks_page((FIXTURES / "marks_taipei_adult_latin_2026.html").read_bytes())
     final_marks = parse_final_page((FIXTURES / "final_taipei_adult_latin_2026.html").read_bytes())
-    final_round_order = max(r.round_order for r in ranking_page.rounds)
 
-    n_recall = load_marks(
-        session, comp_event, entry_by_competitor_no, letter_to_person_id, recall_marks, final_round_order=None
-    )
-    n_final = load_marks(
-        session,
-        comp_event,
-        entry_by_competitor_no,
-        letter_to_person_id,
-        final_marks,
-        final_round_order=final_round_order,
-    )
+    n_recall = load_marks(session, comp_event, entry_by_competitor_no, letter_to_person_id, recall_marks)
+    n_final = load_marks(session, comp_event, entry_by_competitor_no, letter_to_person_id, final_marks)
     session.commit()
     return competition, comp_event, n_recall, n_final
 
