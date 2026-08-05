@@ -8,15 +8,28 @@ import pandas as pd
 import streamlit as st
 from sqlalchemy import func, or_, select
 
-from dsr.db import get_session
+from dsr.db import get_engine, get_session
 from dsr.models import CompEvent, Competition, Entry, Mark, Partnership, Person, PersonAlias, Result, Round
 
-st.set_page_config(page_title="DanceSport Results", layout="wide")
+st.set_page_config(page_title="DanceSport Wiki", layout="wide")
 
 
 @st.cache_resource
+def _engine():
+    return get_engine()
+
+
 def _session():
-    return get_session()
+    # A cached Engine (connection pool) is safe to share across concurrent
+    # script reruns; a cached Session is not -- Sessions aren't thread-safe,
+    # and Streamlit can run more than one script execution at a time (e.g.
+    # rapid interactions triggering overlapping reruns). Caching the Session
+    # itself let two reruns share one DBAPI connection concurrently, which
+    # hung the whole server with runaway CPU that didn't even respond to
+    # SIGTERM -- only a SIGKILL cleared it. A fresh Session per rerun is
+    # cheap (no connection opens until the first query) and the standard
+    # SQLAlchemy usage pattern anyway.
+    return get_session(_engine())
 
 
 def search_people(session, term: str, limit: int = 25) -> list[Person]:
@@ -235,6 +248,14 @@ def _person_names(session, person_ids: set[int]) -> dict[int, str]:
     return {pid: name for pid, name in rows}
 
 
+def _ordinal(n: int) -> str:
+    if 10 <= n % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
 def results_for_comp_event(session, comp_event_id: int) -> pd.DataFrame:
     stmt = (
         select(Result, Entry, Partnership)
@@ -303,13 +324,24 @@ def results_for_comp_event(session, comp_event_id: int) -> pd.DataFrame:
         df = df.sort_values(
             ["_group", "_placement_sort", "_round_order", "_marks_total", "_first_name"],
             ascending=[True, True, False, False, True],
-        )
+        ).reset_index(drop=True)
+
+        # Not-recalled couples show their overall standing (their 1-indexed
+        # position in this same field-wide ranking, continuing on from the
+        # last finalist) plus how many judges marked them in the round they
+        # were eliminated in, e.g. "9th (10 marks)" -- per user request, so
+        # "not recalled" alone doesn't hide how close a couple actually got.
+        not_recalled = df["Placement"] == "not recalled"
+        overall_rank = df.index[not_recalled] + 1
+        marks_total = df.loc[not_recalled, "_marks_total"].astype(int)
+        df.loc[not_recalled, "Placement"] = [
+            f"{_ordinal(rank)} ({marks} mark{'' if marks == 1 else 's'})" for rank, marks in zip(overall_rank, marks_total)
+        ]
+
         # _entry_id is kept (not dropped) so callers can look up which couple a
         # row is, for the judges' marks drill-down -- hidden from display via
         # column_order in st.dataframe rather than dropped here.
-        df = df.drop(
-            columns=["_group", "_placement_sort", "_round_order", "_marks_total", "_first_name"]
-        ).reset_index(drop=True)
+        df = df.drop(columns=["_group", "_placement_sort", "_round_order", "_marks_total", "_first_name"])
     return df
 
 
@@ -739,7 +771,7 @@ def dancer_search(session) -> None:
 
 def main() -> None:
     session = _session()
-    st.title("DanceSport Results")
+    st.title("DanceSport Wiki")
 
     mode = st.radio("Search by", ["Dancer", "Competition"], horizontal=True)
     if mode == "Dancer":

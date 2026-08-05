@@ -7,14 +7,16 @@ import pandas as pd
 
 from app import (
     _highest_round_labels_for_entries,
+    _ordinal,
     _skating_system_rank,
     marks_detail_for_entry,
     marks_detail_with_totals,
+    results_for_comp_event,
     skating_system_results_for_final,
 )
 
 from dsr.db import get_session, init_db
-from dsr.models import CompEvent, Competition, Entry, Mark, Partnership, Person, Round
+from dsr.models import CompEvent, Competition, Entry, Mark, Partnership, Person, Result, Round
 
 
 def test_highest_round_is_scoped_per_comp_event_not_shared_entry(tmp_path):
@@ -210,3 +212,79 @@ def test_marks_detail_with_totals_inserts_per_dance_and_per_round_rows():
     calls = result["Call"].tolist()
 
     assert calls == ["✓", "--", "Total: marked 1/2", "✓", "✓", "Total: marked 2/2", "Round total: marked 3/4"]
+
+
+def test_ordinal():
+    assert _ordinal(1) == "1st"
+    assert _ordinal(2) == "2nd"
+    assert _ordinal(3) == "3rd"
+    assert _ordinal(4) == "4th"
+    assert _ordinal(11) == "11th"
+    assert _ordinal(12) == "12th"
+    assert _ordinal(13) == "13th"
+    assert _ordinal(21) == "21st"
+    assert _ordinal(101) == "101st"
+    assert _ordinal(111) == "111th"
+
+
+def test_not_recalled_couples_show_overall_rank_and_marks_count(tmp_path):
+    # Per user request: not-recalled couples should show their overall
+    # standing plus how many judges marked them in the round they were
+    # eliminated in, e.g. "9th (10 marks)", rather than a bare "not
+    # recalled" that hides how close they got.
+    engine = init_db(tmp_path / "not_recalled_ranking.sqlite3")
+    session = get_session(engine)
+
+    competition = Competition(source="ndca_premier", source_code="1", name="Test Comp")
+    session.add(competition)
+    session.flush()
+
+    event = CompEvent(competition_id=competition.id, raw_title="Test Event")
+    session.add(event)
+    session.flush()
+
+    final_round = Round(comp_event_id=event.id, round_type="final", round_order=2)
+    semi_round = Round(comp_event_id=event.id, round_type="Semi-Final", round_order=1)
+    session.add_all([final_round, semi_round])
+    session.flush()
+
+    def make_couple(name_a, name_b, competitor_no):
+        leader = Person(display_name=name_a)
+        follower = Person(display_name=name_b)
+        session.add_all([leader, follower])
+        session.flush()
+        partnership = Partnership(leader_id=leader.id, follower_id=follower.id, kind="amateur")
+        session.add(partnership)
+        session.flush()
+        entry = Entry(competition_id=competition.id, partnership_id=partnership.id, competitor_no=competitor_no)
+        session.add(entry)
+        session.flush()
+        return entry
+
+    finalist = make_couple("Alice", "Bob", "1")
+    session.add(Result(comp_event_id=event.id, entry_id=finalist.id, placement_low=1, placement_high=1, field_size=3))
+    session.add(Mark(round_id=final_round.id, entry_id=finalist.id, dance="Waltz", placement=1))
+
+    # More judges marked "Carla" than "Eve" in the semi-final, so Carla
+    # should rank ahead of Eve despite neither making the final.
+    carla = make_couple("Carla", "Dan", "2")
+    session.add(Result(comp_event_id=event.id, entry_id=carla.id, placement_low=None, placement_high=None, field_size=3))
+    session.add_all(
+        [
+            Mark(round_id=semi_round.id, entry_id=carla.id, dance="Waltz", recalled=True),
+            Mark(round_id=semi_round.id, entry_id=carla.id, dance="Tango", recalled=True),
+        ]
+    )
+
+    eve = make_couple("Eve", "Frank", "3")
+    session.add(Result(comp_event_id=event.id, entry_id=eve.id, placement_low=None, placement_high=None, field_size=3))
+    session.add(Mark(round_id=semi_round.id, entry_id=eve.id, dance="Waltz", recalled=True))
+
+    session.commit()
+
+    df = results_for_comp_event(session, event.id)
+    rows = df.set_index("Couple")
+
+    assert rows.loc["Alice & Bob", "Placement"] == "1"
+    assert rows.loc["Carla & Dan", "Placement"] == "2nd (2 marks)"
+    assert rows.loc["Eve & Frank", "Placement"] == "3rd (1 mark)"
