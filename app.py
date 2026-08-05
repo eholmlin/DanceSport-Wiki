@@ -690,8 +690,12 @@ def competition_search(session) -> None:
     st.subheader(f"Events ({len(events)}) -- {total_entries} entries total")
 
     styles = sorted({e.style or "unknown" for e in events})
-    style_choice = st.selectbox("Filter by style", ["All"] + styles)
+    filter_cols = st.columns(2)
+    style_choice = filter_cols[0].selectbox("Filter by style", ["All"] + styles)
+    title_filter = filter_cols[1].text_input("Filter by event title (e.g. 'Youth', 'Championship')", "")
     filtered = [e for e in events if style_choice == "All" or (e.style or "unknown") == style_choice]
+    if title_filter:
+        filtered = [e for e in filtered if title_filter.lower() in e.raw_title.lower()]
     filtered.sort(key=lambda e: counts.get(e.id, 0), reverse=True)
 
     if not filtered:
