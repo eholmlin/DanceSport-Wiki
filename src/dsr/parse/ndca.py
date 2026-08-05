@@ -16,7 +16,10 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 from dsr.parse.staging import (
     RankingPage,
@@ -192,7 +195,23 @@ def _parse_event_dict(event: dict) -> NdcaEventData:
                 bib = _require(c, "Bib", "competitor-in-dance")
                 participants = c.get("Participants") or []
                 if not participants:
-                    raise ParseError(f"competitor bib={bib!r} has no Participants")
+                    # A real (if rare) NDCA-side data gap, not a parsing bug --
+                    # confirmed by cross-checking the live source: this exact
+                    # bib/dance combo has no Participants in the source's own
+                    # JSON. Skip just this one row rather than the whole
+                    # event: since this same event's data is identical no
+                    # matter which competitor's fetch it came through (every
+                    # competitor in a heat sees the whole heat), raising here
+                    # would make the entire event permanently unloadable from
+                    # every possible fetch -- a real bug this replaced (see
+                    # docs/ndca-format-notes.md).
+                    logger.warning(
+                        "skipping competitor with no Participants: bib=%r dance=%r round=%r",
+                        bib,
+                        dance_name,
+                        round_label,
+                    )
+                    continue
                 is_solo = is_solo or len(participants) == 1
 
                 if bib not in seen_bibs:
@@ -243,7 +262,19 @@ def _parse_event_dict(event: dict) -> NdcaEventData:
 
 
 def parse_competitor_feed(results_json: bytes) -> list[NdcaEventData]:
-    """Parse a /feed/results/?cyi=<id>&id=<competitor> response into one NdcaEventData per event."""
+    """Parse a /feed/results/?cyi=<id>&id=<competitor> response into one NdcaEventData per event.
+
+    Each event is parsed independently: one malformed event (e.g. a
+    competitor-in-dance row with no Participants -- a real, if rare, NDCA-side
+    data gap, not a parsing bug) must not lose every *other* event in the same
+    response. This was a real bug: since one competitor's fetch typically
+    covers many events, and every one of those events' data is shared across
+    every competitor who danced it (see module docstring / format notes), a
+    single poisoned event previously failed the whole response -- and if
+    every document containing that event carried the same bad row, the event
+    silently never loaded at all, from any document, permanently. Skipped
+    events are logged (not silent), just not fatal to their siblings.
+    """
     payload = json.loads(results_json)
     if payload.get("Status") != 1:
         raise ParseError(f"results feed returned Status={payload.get('Status')!r}")
@@ -251,7 +282,14 @@ def parse_competitor_feed(results_json: bytes) -> list[NdcaEventData]:
     events = result.get("Events")
     if events is None:
         raise ParseError("competitor results feed missing Result.Events")
-    return [_parse_event_dict(e) for e in events]
+
+    parsed: list[NdcaEventData] = []
+    for e in events:
+        try:
+            parsed.append(_parse_event_dict(e))
+        except ParseError as exc:
+            logger.warning("skipping unparseable event %r (%r): %s", e.get("ID"), e.get("Name"), exc)
+    return parsed
 
 
 def parse_event_feed(event_json: bytes) -> NdcaEventData:

@@ -187,3 +187,22 @@ def test_parse_season_listing_skips_unpublished_results():
 def test_parse_season_listing_rejects_garbage():
     with pytest.raises(ParseError):
         parse_season_listing(b'{"Status": 0}')
+
+
+def test_malformed_competitor_skipped_without_losing_sibling_events():
+    # Real case: a competitor's feed covering 2 events, where one event
+    # (Am U21 5-Dance Champ ... Latin) has 3 competitor-in-dance rows with no
+    # Participants (a genuine NDCA-side data gap). The old bug raised on the
+    # first one, losing BOTH events in this response -- and since that same
+    # broken row appears in every fetch that includes this event (heat data
+    # is shared across every competitor in it), the event could never load
+    # from any document. Now: the malformed rows are skipped and logged, both
+    # events load, and the malformed event just has a slightly smaller entry
+    # count than its true field size.
+    events = parse_competitor_feed(load("competitor_A2773_partial_missing_participants.json"))
+    assert {e.source_code for e in events} == {"137", "594"}
+
+    latin_u21 = next(e for e in events if e.source_code == "137")
+    assert len(latin_u21.ranking.entries) == 28  # field_size is 30; some malformed bibs never resolve in any round
+    fordney = next(e for e in events if e.source_code == "594")
+    assert len(fordney.ranking.entries) == 27  # unaffected: no malformed rows in this event

@@ -10,10 +10,13 @@ are skipped entirely (not just idempotently reprocessed) so an interruption
 -- closing the laptop, killing the process -- costs at most one commit
 interval of wall-clock time, not a restart from zero.
 
-Usage: python scripts/reprocess_ndca.py
+Usage:
+    python scripts/reprocess_ndca.py
+    python scripts/reprocess_ndca.py --cyis 261,798,627,904,303,1488,865
 """
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 from sqlalchemy import select
@@ -39,22 +42,38 @@ def _write_checkpoint(doc_id: int) -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--cyis",
+        type=str,
+        default=None,
+        help="comma-separated competition source_codes to limit reprocessing to; default reprocesses everything "
+        "(and uses the checkpoint file). A --cyis run ignores the checkpoint -- it's meant for small, targeted "
+        "re-runs, not the full resumable sweep.",
+    )
+    args = parser.parse_args()
+    cyi_filter = set(args.cyis.split(",")) if args.cyis else None
+
     session = get_session()
 
     competitions_by_source_code = {
         c.source_code: c for c in session.scalars(select(Competition).where(Competition.source == "ndca_premier")).all()
     }
 
-    since_id = _read_checkpoint()
+    since_id = 0 if cyi_filter else _read_checkpoint()
     all_docs = session.scalars(
         select(RawDocument)
         .where(RawDocument.source == "ndca_premier", RawDocument.url.like("%&id=%"), RawDocument.id > since_id)
         .order_by(RawDocument.id)
     ).all()
-    print(
-        f"Resuming after checkpoint doc id={since_id}. {len(all_docs)} documents remaining to reprocess.",
-        flush=True,
-    )
+    if cyi_filter:
+        all_docs = [doc for doc in all_docs if doc.url.split("cyi=")[1].split("&")[0] in cyi_filter]
+        print(f"Targeted reprocess: {len(all_docs)} documents across {len(cyi_filter)} competition(s).", flush=True)
+    else:
+        print(
+            f"Resuming after checkpoint doc id={since_id}. {len(all_docs)} documents remaining to reprocess.",
+            flush=True,
+        )
 
     n_events = 0
     n_errors = 0
@@ -75,11 +94,13 @@ def main() -> None:
 
         if (i + 1) % COMMIT_EVERY == 0:
             session.commit()
-            _write_checkpoint(last_id)
+            if not cyi_filter:
+                _write_checkpoint(last_id)
             print(f"  [{i + 1}/{len(all_docs)}] {n_events} events reprocessed so far (checkpoint={last_id})", flush=True)
 
     session.commit()
-    _write_checkpoint(last_id)
+    if not cyi_filter:
+        _write_checkpoint(last_id)
     print(f"\nDone. {n_events} event-loads reprocessed across {len(all_docs)} documents. {n_errors} parse errors.", flush=True)
 
 
