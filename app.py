@@ -164,10 +164,24 @@ def result_history_for_partnership(session, partnership_id: int) -> pd.DataFrame
         session, [(entry.id, comp_event.id) for _, comp_event, entry, _ in result_rows]
     )
 
+    # Not-recalled rows reuse results_for_comp_event's own Placement string
+    # (e.g. "9th (10 marks)") rather than recomputing the same field-wide
+    # ranking here -- that keeps the dancer view and the competition view
+    # permanently in agreement instead of drifting out of sync, and this was
+    # the bug: the dancer view still showed a bare "not recalled" after the
+    # competition view was changed to show rank + marks. One
+    # results_for_comp_event call per not-recalled event (cached here so a
+    # repeat event isn't recomputed), not per row.
+    event_results_cache: dict[int, pd.DataFrame] = {}
+
     rows = []
     for competition, comp_event, entry, result in result_rows:
         if result.placement_low is None:
-            placement = "not recalled"
+            if comp_event.id not in event_results_cache:
+                event_results_cache[comp_event.id] = results_for_comp_event(session, comp_event.id)
+            event_df = event_results_cache[comp_event.id]
+            match = event_df.loc[event_df["_entry_id"] == entry.id, "Placement"]
+            placement = match.iloc[0] if not match.empty else "not recalled"
         elif result.placement_low == result.placement_high:
             placement = str(result.placement_low)
         else:
