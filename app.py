@@ -650,7 +650,7 @@ def marks_judge_totals(df: pd.DataFrame) -> pd.DataFrame:
 def competition_search(session) -> None:
     term = st.text_input("Search for a competition by name", "", key="competition_search_term")
     if not term:
-        st.info("Type a competition name above (e.g. 'Emerald Ball', 'US National').")
+        st.info("Type a competition name above (e.g. 'Emerald Ball', 'U.S. National').")
         return
 
     competitions = search_competitions(session, term)
