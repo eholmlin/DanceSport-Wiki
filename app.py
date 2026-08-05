@@ -205,7 +205,15 @@ def result_history_for_partnership(session, partnership_id: int) -> pd.DataFrame
 
 
 def best_results(df: pd.DataFrame, n: int = 5) -> pd.DataFrame:
-    scored = df[df["Placement"] != "not recalled"].copy()
+    # A genuine finalist placement is purely numeric (optionally a decimal
+    # tie like "2.5", optionally a "N-M" range). Not-recalled rows are
+    # excluded by NOT matching this pattern -- previously excluded via
+    # `!= "not recalled"`, which broke the moment not-recalled rows started
+    # showing "9th (10 marks)" instead of the literal string "not recalled":
+    # that format slipped past the equality check and crashed trying to
+    # parse "9th (10 marks)" as a float.
+    is_placement = df["Placement"].str.match(r"^\d+(\.\d+)?(-\d+(\.\d+)?)?$", na=False)
+    scored = df[is_placement].copy()
     if scored.empty:
         return scored
     # placements are usually small ints, but NDCA ties can produce a fractional

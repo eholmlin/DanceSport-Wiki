@@ -9,6 +9,7 @@ from app import (
     _highest_round_labels_for_entries,
     _ordinal,
     _skating_system_rank,
+    best_results,
     marks_detail_for_entry,
     marks_detail_with_totals,
     results_for_comp_event,
@@ -288,3 +289,22 @@ def test_not_recalled_couples_show_overall_rank_and_marks_count(tmp_path):
     assert rows.loc["Alice & Bob", "Placement"] == "1"
     assert rows.loc["Carla & Dan", "Placement"] == "2nd (2 marks)"
     assert rows.loc["Eve & Frank", "Placement"] == "3rd (1 mark)"
+
+
+def test_best_results_excludes_not_recalled_rank_and_marks_format():
+    # Real crash: result_history_for_partnership started showing not-recalled
+    # rows as "9th (10 marks)" instead of the literal string "not recalled",
+    # so best_results()'s old `Placement != "not recalled"` filter no longer
+    # excluded them -- they slipped into `scored` and crashed trying to
+    # .astype(float) a string like "9th (10 marks)".
+    df = pd.DataFrame(
+        [
+            {"Placement": "1"},
+            {"Placement": "2.5"},
+            {"Placement": "3-4"},
+            {"Placement": "9th (10 marks)"},
+            {"Placement": "not recalled"},
+        ]
+    )
+    result = best_results(df, n=5)
+    assert list(result["Placement"]) == ["1", "2.5", "3-4"]
