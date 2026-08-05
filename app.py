@@ -47,7 +47,7 @@ _rounds_by_comp_event_cache: dict[int, list[Round]] = {}
 
 def _highest_round_labels_for_entries(
     session, entry_comp_events: list[tuple[int, int]]
-) -> dict[tuple[int, int], tuple[int, str]]:
+) -> dict[tuple[int, int], tuple[int, int, str]]:
     """Batched version: one query for every (entry, comp_event) pair at once,
     instead of one query per row. With ~3M marks loaded, the old per-row query
     (a JOIN + ORDER BY + LIMIT 1 called once per result) made any dancer with
@@ -63,33 +63,35 @@ def _highest_round_labels_for_entries(
     Round 1 -- a real cross-event data leak, caught via a user report of
     "highest round: Final" next to placement "not recalled" for the same row.
 
-    Returns (round_order, label) rather than just label, so callers that need
-    to rank not-recalled couples by how far they got (Semi-Final > Quarter-
-    Final > Round N > ... > Round 1) don't need a second query -- round_order
-    is exactly the spec's "final has the highest round_order" ordering.
+    Returns (round_id, round_order, label) rather than just label: round_order
+    lets callers rank not-recalled couples by how far they got (Semi-Final >
+    Quarter-Final > Round N > ... > Round 1, per the spec's "final has the
+    highest round_order"); round_id lets callers batch-fetch that couple's
+    marks from the exact round they were eliminated in (see
+    marks_totals_for_entries_in_round), without a second per-row query.
     """
     if not entry_comp_events:
         return {}
     entry_ids = {eid for eid, _ in entry_comp_events}
     rows = session.execute(
-        select(Mark.entry_id, Round.comp_event_id, Round.round_order, Round.round_type)
+        select(Mark.entry_id, Round.comp_event_id, Round.id, Round.round_order, Round.round_type)
         .join(Round, Mark.round_id == Round.id)
         .where(Mark.entry_id.in_(entry_ids))
         .distinct()
     ).all()
-    best: dict[tuple[int, int], tuple[int, str]] = {}
-    for entry_id, comp_event_id, round_order, round_type in rows:
+    best: dict[tuple[int, int], tuple[int, int, str]] = {}
+    for entry_id, comp_event_id, round_id, round_order, round_type in rows:
         key = (entry_id, comp_event_id)
-        if key not in best or round_order > best[key][0]:
-            best[key] = (round_order, round_type)
-    return {key: (ro, "Final" if rt == "final" else rt) for key, (ro, rt) in best.items()}
+        if key not in best or round_order > best[key][1]:
+            best[key] = (round_id, round_order, round_type)
+    return {key: (rid, ro, "Final" if rt == "final" else rt) for key, (rid, ro, rt) in best.items()}
 
 
-def _highest_round_fallback(session, comp_event_id: int, placement_low: int | None) -> tuple[int, str]:
+def _highest_round_fallback(session, comp_event_id: int, placement_low: int | None) -> tuple[int | None, int, str]:
     """Used only for the rare entry with no marks on record at all but a
     known placement (shouldn't normally happen for pipeline-loaded data)."""
     if placement_low is None:
-        return (-1, "unknown")
+        return (None, -1, "unknown")
     if comp_event_id not in _rounds_by_comp_event_cache:
         _rounds_by_comp_event_cache[comp_event_id] = list(
             session.scalars(
@@ -100,8 +102,38 @@ def _highest_round_fallback(session, comp_event_id: int, placement_low: int | No
         )
     for round_row in _rounds_by_comp_event_cache[comp_event_id]:
         if round_row.entries_in >= placement_low:
-            return (round_row.round_order, "Final" if round_row.round_type == "final" else round_row.round_type)
-    return (-1, "unknown")
+            return (round_row.id, round_row.round_order, "Final" if round_row.round_type == "final" else round_row.round_type)
+    return (None, -1, "unknown")
+
+
+def marks_totals_for_entries_in_round(session, entry_round_ids: set[tuple[int, int]]) -> dict[tuple[int, int], int]:
+    """Batched: for each (entry_id, round_id) pair, how many judges marked
+    that couple in that round (across every dance) -- used to rank
+    not-recalled couples by how close they got, per user request ("the
+    couple with the highest number of marks in the semi-final not to be
+    recalled" should rank above couples with fewer marks in the same round).
+
+    Keyed by (entry_id, round_id), not entry_id alone, for the same reason
+    _highest_round_labels_for_entries is: one entry_id can have marks across
+    several rounds/events, and only the specific round each couple was
+    actually eliminated in is relevant here.
+    """
+    if not entry_round_ids:
+        return {}
+    entry_ids = {eid for eid, _ in entry_round_ids}
+    round_ids = {rid for _, rid in entry_round_ids}
+    rows = session.execute(
+        select(Mark.entry_id, Mark.round_id, Mark.recalled).where(
+            Mark.entry_id.in_(entry_ids), Mark.round_id.in_(round_ids)
+        )
+    ).all()
+    totals: dict[tuple[int, int], int] = {}
+    for entry_id, round_id, recalled in rows:
+        key = (entry_id, round_id)
+        if key not in entry_round_ids:
+            continue  # this entry's marks in a round that belongs to a *different* requested pair
+        totals[key] = totals.get(key, 0) + (1 if recalled else 0)
+    return totals
 
 
 def result_history_for_partnership(session, partnership_id: int) -> pd.DataFrame:
@@ -127,9 +159,9 @@ def result_history_for_partnership(session, partnership_id: int) -> pd.DataFrame
             placement = str(result.placement_low)
         else:
             placement = f"{result.placement_low}-{result.placement_high}"
-        _round_order, highest_round = highest_round_by_key.get((entry.id, comp_event.id)) or _highest_round_fallback(
-            session, comp_event.id, result.placement_low
-        )
+        _round_id, _round_order, highest_round = highest_round_by_key.get(
+            (entry.id, comp_event.id)
+        ) or _highest_round_fallback(session, comp_event.id, result.placement_low)
         rows.append(
             {
                 "Date": competition.start_date,
@@ -217,7 +249,7 @@ def results_for_comp_event(session, comp_event_id: int) -> pd.DataFrame:
     names = _person_names(session, person_ids)
     highest_round_by_key = _highest_round_labels_for_entries(session, [(entry.id, comp_event_id) for _, entry, _ in rows])
 
-    out = []
+    prelim = []
     for result, entry, partnership in rows:
         parts = [names[pid] for pid in (partnership.leader_id, partnership.follower_id) if pid in names]
         couple = " & ".join(parts) if parts else "(solo)"
@@ -227,34 +259,338 @@ def results_for_comp_event(session, comp_event_id: int) -> pd.DataFrame:
             placement = str(result.placement_low)
         else:
             placement = f"{result.placement_low}-{result.placement_high}"
-        round_order, highest_round = highest_round_by_key.get((entry.id, comp_event_id)) or _highest_round_fallback(
-            session, comp_event_id, result.placement_low
-        )
+        round_id, round_order, highest_round = highest_round_by_key.get(
+            (entry.id, comp_event_id)
+        ) or _highest_round_fallback(session, comp_event_id, result.placement_low)
+        prelim.append((couple, highest_round, placement, result.field_size, entry.competitor_no, round_id, round_order, entry.id))
+
+    # Batch-fetch how many judges marked each not-recalled couple in the
+    # specific round they were eliminated in, so they can be ranked by how
+    # close they got (see marks_totals_for_entries_in_round) instead of in
+    # arbitrary order within the same round.
+    entry_round_pairs = {(entry_id, round_id) for *_rest, round_id, _ro, entry_id in prelim if round_id is not None}
+    marks_totals = marks_totals_for_entries_in_round(session, entry_round_pairs)
+
+    out = []
+    for couple, highest_round, placement, field_size, competitor_no, round_id, round_order, entry_id in prelim:
         out.append(
             {
                 "Couple": couple,
                 "Highest round": highest_round,
                 "Placement": placement,
-                "Field size": result.field_size,
-                "Start #": entry.competitor_no,
+                "Field size": field_size,
+                "Start #": competitor_no,
                 "_round_order": round_order,
+                "_marks_total": marks_totals.get((entry_id, round_id), 0) if round_id is not None else 0,
+                "_first_name": (couple.split(" & ")[0].split() or [""])[0],
+                "_entry_id": entry_id,
             }
         )
     df = pd.DataFrame(out)
     if not df.empty:
         # Placed couples sort by placement ascending, same as before. Couples
-        # who weren't recalled sort after every placed couple, and among
-        # themselves by how far they got -- Semi-Final before Quarter-Final
-        # before Round N before Round N-1, etc (round_order descending) --
-        # per user request, since "not recalled" alone doesn't distinguish a
-        # semi-finalist from a first-round exit.
+        # who weren't recalled sort after every placed couple; among
+        # themselves: by how far they got (Semi-Final before Quarter-Final
+        # before Round N before Round N-1, i.e. round_order descending), then
+        # by how many judges marked them in that round (descending -- the
+        # couple closest to advancing ranks first, e.g. "7th" in a
+        # semi-final of 6), then alphabetically by the first (leading)
+        # dancer's first name to break any remaining tie. Per user request.
         not_recalled = df["Placement"] == "not recalled"
-        df["_sort"] = pd.NA
-        df.loc[~not_recalled, "_sort"] = df.loc[~not_recalled, "Placement"].str.split("-").str[0].astype(float)
-        df.loc[not_recalled, "_sort"] = 1_000_000 - df.loc[not_recalled, "_round_order"]
-        df["_sort"] = df["_sort"].astype(float)
-        df = df.sort_values("_sort").drop(columns=["_sort", "_round_order"]).reset_index(drop=True)
+        df["_group"] = not_recalled.astype(int)
+        df["_placement_sort"] = 0.0
+        df.loc[~not_recalled, "_placement_sort"] = df.loc[~not_recalled, "Placement"].str.split("-").str[0].astype(float)
+        df = df.sort_values(
+            ["_group", "_placement_sort", "_round_order", "_marks_total", "_first_name"],
+            ascending=[True, True, False, False, True],
+        )
+        # _entry_id is kept (not dropped) so callers can look up which couple a
+        # row is, for the judges' marks drill-down -- hidden from display via
+        # column_order in st.dataframe rather than dropped here.
+        df = df.drop(
+            columns=["_group", "_placement_sort", "_round_order", "_marks_total", "_first_name"]
+        ).reset_index(drop=True)
     return df
+
+
+# Standard Latin syllabus order (matches the "CC,S,R,PD,J" abbreviations in
+# event titles), not alphabetical -- used to order dances in the marks
+# detail and routine-totals tables the way a dancer actually expects them.
+_LATIN_DANCE_ORDER = ["Cha Cha", "Samba", "Rumba", "Paso Doble", "Jive"]
+
+
+def _dance_sort_key(dance_name: str) -> tuple[int, str]:
+    name = dance_name or ""
+    for i, keyword in enumerate(_LATIN_DANCE_ORDER):
+        if keyword.lower() in name.lower():
+            return (i, name)
+    return (len(_LATIN_DANCE_ORDER), name)
+
+
+def marks_detail_for_entry(session, entry_id: int, comp_event_id: int) -> pd.DataFrame:
+    """One row per (round, dance, judge) mark for one couple in one event --
+    the raw material for the round/routine/judge totals below.
+
+    Non-final rounds and the skated Final use different judging systems (a
+    yes/no mark per judge per dance -- did this judge mark the couple to
+    advance -- vs. an ordinal placement per judge per dance), so both "Call"
+    (human-readable) and "_numeric" (1/0 for a mark, the placement number for
+    Final) are carried through: totals need the numeric form, display needs
+    the readable form.
+
+    Terminology: a judge "marks" a couple in a non-final round (that's the
+    literal action being recorded -- Mark.recalled is this judge's individual
+    yes/no vote). "Recalled" describes the round-level *outcome* once every
+    judge's marks are tallied against the panel's callback quota -- a couple
+    is recalled or not, but no single judge "recalls" anyone. Mixing the two
+    up here previously.
+    """
+    # Cast defensively: a numpy.int64 pulled straight out of a pandas column
+    # (as callers do, via a selectbox built from results_for_comp_event's
+    # dataframe) makes Mark.entry_id == entry_id silently match zero rows
+    # instead of erroring -- caught by comparing against a hardcoded plain
+    # int, which returned the expected 300 rows where the numpy value
+    # returned none.
+    entry_id = int(entry_id)
+    comp_event_id = int(comp_event_id)
+
+    rounds = list(session.scalars(select(Round).where(Round.comp_event_id == comp_event_id)).all())
+    round_by_id = {r.id: r for r in rounds}
+    if not round_by_id:
+        return pd.DataFrame()
+
+    stmt = (
+        select(Mark, Person.display_name)
+        .join(Person, Mark.judge_person_id == Person.id, isouter=True)
+        .where(Mark.entry_id == entry_id, Mark.round_id.in_(list(round_by_id.keys())))
+    )
+    out = []
+    for mark, judge_name in session.execute(stmt).all():
+        round_row = round_by_id[mark.round_id]
+        if mark.placement is not None:
+            call, numeric, is_placement = f"Placed {mark.placement}", mark.placement, True
+        elif mark.recalled is not None:
+            call, numeric, is_placement = ("✓" if mark.recalled else "--"), int(mark.recalled), False
+        else:
+            call, numeric, is_placement = "unknown", None, False
+        out.append(
+            {
+                "Round": "Final" if round_row.round_type == "final" else round_row.round_type,
+                "Dance": mark.dance,
+                "Judge": judge_name or "unknown",
+                "Call": call,
+                "_round_order": round_row.round_order,
+                "_numeric": numeric,
+                "_is_placement": is_placement,
+            }
+        )
+    df = pd.DataFrame(out)
+    if not df.empty:
+        df["_dance_order"] = df["Dance"].map(lambda d: _dance_sort_key(d))
+        df = df.sort_values(["_round_order", "_dance_order", "Judge"]).drop(columns="_dance_order").reset_index(drop=True)
+    return df
+
+
+def marks_detail_with_totals(df: pd.DataFrame) -> pd.DataFrame:
+    """Inserts a "Total" row after each (round, dance) group, and a "Round
+    total" row after each round's dances, into the raw marks detail table --
+    the same arithmetic as marks_round_totals/marks_dance_totals, surfaced
+    inline where every individual mark is listed. Labeled "sum" (not
+    "placement") for the Final, since a plain sum isn't the actual Skating
+    System result -- see marks_round_totals -- just the raw total of what's
+    above it, kept separate to avoid re-implying sum decides placement."""
+    if df.empty:
+        return df
+    # Cast _numeric to float64 up front: each synthetic "Total" row below is
+    # a single-row block whose _numeric is entirely null, which pandas warns
+    # about excluding from dtype inference on concat (FutureWarning) unless
+    # every block already agrees on a dtype -- fixed here rather than
+    # suppressed, since the fix is one line and _numeric is never read after
+    # this function returns (hidden from display, not used downstream).
+    df = df.astype({"_numeric": "float64"})
+    blocks = []
+    for (round_name, round_order), round_group in df.groupby(["Round", "_round_order"], sort=False):
+        for dance, dance_group in round_group.groupby("Dance", sort=False):
+            blocks.append(dance_group)
+            is_placement = bool(dance_group["_is_placement"].iloc[0])
+            total = int(dance_group["_numeric"].sum())
+            call = f"Total: sum = {total}" if is_placement else f"Total: marked {total}/{len(dance_group)}"
+            blocks.append(
+                pd.DataFrame(
+                    [
+                        {
+                            "Round": round_name,
+                            "Dance": dance,
+                            "Judge": "",
+                            "Call": call,
+                            "_round_order": round_order,
+                            "_numeric": float("nan"),
+                            "_is_placement": is_placement,
+                        }
+                    ]
+                )
+            )
+        is_placement = bool(round_group["_is_placement"].iloc[0])
+        total = int(round_group["_numeric"].sum())
+        call = f"Round total: sum = {total}" if is_placement else f"Round total: marked {total}/{len(round_group)}"
+        blocks.append(
+            pd.DataFrame(
+                [
+                    {
+                        "Round": round_name,
+                        "Dance": "",
+                        "Judge": "",
+                        "Call": call,
+                        "_round_order": round_order,
+                        "_numeric": float("nan"),
+                        "_is_placement": is_placement,
+                    }
+                ]
+            )
+        )
+    return pd.concat(blocks, ignore_index=True)
+
+
+def _skating_system_rank(votes_by_competitor: dict[int, list[int]]) -> dict[int, int]:
+    """The Skating System / majority-rule algorithm real judged finals
+    (NDCA, WDSF, figure skating) actually use to turn ordinal per-judge
+    placements into an overall ranking -- NOT a sum or average, which is
+    what this replaced (a user correctly flagged that "sum of placements"
+    was misdescribing how a Final placement is really decided).
+
+    To find 1st place: count how many votes rank each remaining competitor
+    at or better than a rising threshold (1st, then 1st-or-2nd, then
+    1st-2nd-or-3rd, ...) until someone reaches a majority (more than half
+    of all votes cast). Whoever has the most votes at that threshold wins
+    that place; ties are broken by summing that group's own placements
+    (lower sum wins) since sum is a reasonable last resort, just not the
+    primary method. Repeat among the remaining competitors for 2nd, 3rd,
+    etc. This is a best-effort implementation of the standard method --
+    it doesn't reproduce every organization-specific tie-break rule, so it
+    may not always exactly match the official stored Result in edge cases.
+    """
+    total_voters = max((len(v) for v in votes_by_competitor.values()), default=0)
+    if total_voters == 0:
+        return {}
+    majority = total_voters // 2 + 1
+    remaining = set(votes_by_competitor.keys())
+    result: dict[int, int] = {}
+    place = 1
+    while remaining:
+        winners: list[int] = []
+        threshold = 1
+        while not winners and threshold <= total_voters:
+            counts = {c: sum(1 for v in votes_by_competitor[c] if v <= threshold) for c in remaining}
+            best = max(counts.values())
+            if best >= majority:
+                winners = [c for c, cnt in counts.items() if cnt == best]
+            threshold += 1
+        if not winners:
+            # No majority ever reached (shouldn't happen with complete, full
+            # rankings) -- fall back to lowest sum among what's left.
+            winners = [min(remaining, key=lambda c: sum(votes_by_competitor[c]))]
+        elif len(winners) > 1:
+            winners.sort(key=lambda c: sum(votes_by_competitor[c]))
+        for c in winners:
+            result[c] = place
+            place += 1
+            remaining.discard(c)
+    return result
+
+
+def skating_system_results_for_final(session, comp_event_id: int) -> dict[str, dict[int, int]]:
+    """Runs the Skating System over the Final round's raw judge marks for
+    every couple in the field at once (majority rule is only meaningful
+    relative to the whole field, not one couple in isolation).
+
+    Returns per_dance: per_dance[dance][entry_id] is the couple's computed
+    placement using only that one dance's judges' votes -- feeds "Totals by
+    routine", where there's no official per-dance placement to fall back on
+    (NDCA only stores the combined overall Final result). The overall
+    combined placement itself is NOT recomputed here anymore: the official
+    stored Result is authoritative and simpler to just display directly
+    (see marks_round_totals) -- a prior version re-derived it via majority-
+    of-dances for transparency, but the user decided the official number
+    alone is enough for that row.
+    """
+    # Round.round_type is "final" (lowercase) for WDSF but "Final" (as-is
+    # from source) for NDCA -- see the same normalization elsewhere in this
+    # file ("Final" if round_type == "final" else round_type). A
+    # case-sensitive match here silently found nothing for NDCA competitions.
+    final_round = session.scalar(
+        select(Round).where(Round.comp_event_id == comp_event_id, func.lower(Round.round_type) == "final")
+    )
+    if final_round is None:
+        return {}
+    marks = list(session.scalars(select(Mark).where(Mark.round_id == final_round.id, Mark.placement.is_not(None))).all())
+    if not marks:
+        return {}
+
+    votes_by_dance: dict[str, dict[int, list[int]]] = {}
+    for m in marks:
+        votes_by_dance.setdefault(m.dance, {}).setdefault(m.entry_id, []).append(m.placement)
+
+    return {dance: _skating_system_rank(votes) for dance, votes in votes_by_dance.items()}
+
+
+def marks_round_totals(df: pd.DataFrame, official_placement: str | None = None) -> pd.DataFrame:
+    """Per round: non-final rounds show how many judges marked this couple
+    to advance (out of all judge-dance marks that round); the Final just
+    states the official stored placement -- that's the authoritative
+    number, so it's shown directly rather than re-derived (see
+    skating_system_results_for_final's docstring for why a prior version
+    computed its own placement here and why that was dropped).
+
+    "Marked", not "recalled": a judge marks a couple in a non-final round;
+    whether the couple is actually recalled is a round-level outcome decided
+    once every judge's marks are tallied, not something any one judge does.
+    """
+    if df.empty:
+        return df
+    out = []
+    for (round_name, round_order), group in df.groupby(["Round", "_round_order"]):
+        if group["_is_placement"].any():
+            total = f"Official: place {official_placement}" if official_placement is not None else "unknown"
+        else:
+            marked = int(group["_numeric"].sum())
+            total = f"Marked by {marked}/{len(group)} judges"
+        out.append({"Round": round_name, "Total": total, "_round_order": round_order})
+    return pd.DataFrame(out).sort_values("_round_order").drop(columns="_round_order").reset_index(drop=True)
+
+
+def marks_dance_totals(df: pd.DataFrame, per_dance_skating_placements: dict[str, int] | None = None) -> pd.DataFrame:
+    """Per dance (routine), across the whole event: how many judge-marks
+    this couple received in non-Final rounds, and the Skating System
+    placement for that single dance if they made the Final."""
+    if df.empty:
+        return df
+    per_dance_skating_placements = per_dance_skating_placements or {}
+    out = []
+    for dance in sorted(df["Dance"].unique(), key=_dance_sort_key):
+        group = df[df["Dance"] == dance]
+        marks_given = group[~group["_is_placement"]]
+        marks_str = f"{int(marks_given['_numeric'].sum())}/{len(marks_given)}" if not marks_given.empty else "--"
+        placement = per_dance_skating_placements.get(dance)
+        final_str = f"place {placement}" if placement is not None else "--"
+        out.append({"Dance": dance, "Judges' marks": marks_str, "Final placement (this dance)": final_str})
+    return pd.DataFrame(out).reset_index(drop=True)
+
+
+def marks_judge_totals(df: pd.DataFrame) -> pd.DataFrame:
+    """Per judge, across the whole event: how often they marked this couple
+    to advance, and the sum of placements they personally gave in the
+    Final -- surfaces whether a particular judge was consistently harsher
+    or kinder."""
+    if df.empty:
+        return df
+    out = []
+    for judge, group in df.groupby("Judge"):
+        marks_given = group[~group["_is_placement"]]
+        final_votes = group[group["_is_placement"]]
+        marks_str = f"{int(marks_given['_numeric'].sum())}/{len(marks_given)}" if not marks_given.empty else "--"
+        final_str = str(int(final_votes["_numeric"].sum())) if not final_votes.empty else "--"
+        out.append({"Judge": judge, "Marks given": marks_str, "Final placement sum given": final_str})
+    return pd.DataFrame(out).reset_index(drop=True)
 
 
 def competition_search(session) -> None:
@@ -316,17 +652,36 @@ def competition_search(session) -> None:
     if df.empty:
         st.write("No results on file for this event.")
     else:
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        display_cols = [c for c in df.columns if not c.startswith("_")]
+        st.dataframe(df, use_container_width=True, hide_index=True, column_order=display_cols)
 
-    st.subheader("Entries by style")
-    style_counts: dict[str, int] = {}
-    for e in events:
-        key = e.style or "unknown"
-        style_counts[key] = style_counts.get(key, 0) + counts.get(e.id, 0)
-    if style_counts:
-        st.bar_chart(pd.Series(style_counts))
-    else:
-        st.write("No results on file yet.")
+        st.subheader("Judges' marks")
+        couple_options = dict(zip(df["Couple"], df["_entry_id"]))
+        couple_choice = st.selectbox("Select a couple to see judges' marks", list(couple_options.keys()))
+        entry_id = int(couple_options[couple_choice])  # numpy.int64 from the dataframe -- see marks_detail_for_entry
+        official_placement = df.loc[df["Couple"] == couple_choice, "Placement"].iloc[0]
+
+        marks_df = marks_detail_for_entry(session, entry_id, event.id)
+        if marks_df.empty:
+            st.write("No judges' marks on file for this couple in this event.")
+        else:
+            per_dance_skating = skating_system_results_for_final(session, event.id)
+            round_totals = marks_round_totals(marks_df, official_placement)
+            dance_totals = marks_dance_totals(marks_df, {d: p.get(entry_id) for d, p in per_dance_skating.items()})
+            judge_totals = marks_judge_totals(marks_df)
+
+            mcols = st.columns(3)
+            mcols[0].write("**Totals by round**")
+            mcols[0].dataframe(round_totals, use_container_width=True, hide_index=True)
+            mcols[1].write("**Totals by routine**")
+            mcols[1].dataframe(dance_totals, use_container_width=True, hide_index=True)
+            mcols[2].write("**Totals by judge**")
+            mcols[2].dataframe(judge_totals, use_container_width=True, hide_index=True)
+
+            with st.expander("Full marks detail (every judge, every dance, every round)"):
+                detail_df = marks_detail_with_totals(marks_df)
+                detail_cols = [c for c in detail_df.columns if not c.startswith("_")]
+                st.dataframe(detail_df, use_container_width=True, hide_index=True, column_order=detail_cols)
 
 
 def dancer_search(session) -> None:
@@ -380,13 +735,6 @@ def dancer_search(session) -> None:
             if not best.empty:
                 st.write("**Best results**")
                 st.dataframe(best, use_container_width=True, hide_index=True)
-
-    st.subheader("Event mix by style (all partnerships combined)")
-    combined = pd.concat([df for _, df in partnership_dfs if not df.empty], ignore_index=True)
-    if combined.empty:
-        st.write("No competition results on file yet.")
-    else:
-        st.bar_chart(combined["Style"].fillna("unknown").value_counts())
 
 
 def main() -> None:
