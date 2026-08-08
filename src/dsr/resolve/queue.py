@@ -28,27 +28,73 @@ def merge_people(session: Session, *, keep_person_id: int, remove_person_id: int
     """Reassign every FK pointing at remove_person_id over to keep_person_id,
     then delete the now-orphaned person row. Idempotent to call twice (second
     call finds remove_person_id already gone and simply does nothing, since
-    every UPDATE targets rows that no longer exist)."""
+    every UPDATE targets rows that no longer exist).
+
+    PersonAlias, Partnership, and Affiliation each carry a uniqueness
+    constraint that a blind bulk UPDATE can violate whenever keep_person_id
+    and remove_person_id independently already have a row for the same
+    (raw_name, source) / (leader, follower, kind) / organization -- e.g. both
+    danced with the same third partner under the same partnership kind. Real
+    case: merging two spelling variants of the same student hit
+    "UNIQUE constraint failed: partnership.leader_id, partnership.follower_id,
+    partnership.kind" because both variants had a partnership with the same
+    instructor. Handled by redirecting onto the row that already exists
+    (moving Partnership's Entry rows along with it) and dropping the
+    now-redundant duplicate, instead of updating it in place.
+    """
     if keep_person_id == remove_person_id:
         return
     if session.get(Person, remove_person_id) is None:
         return
 
-    session.execute(
-        update(PersonAlias).where(PersonAlias.person_id == remove_person_id).values(person_id=keep_person_id)
-    )
-    session.execute(
-        update(Partnership).where(Partnership.leader_id == remove_person_id).values(leader_id=keep_person_id)
-    )
-    session.execute(
-        update(Partnership).where(Partnership.follower_id == remove_person_id).values(follower_id=keep_person_id)
-    )
+    for alias in session.scalars(select(PersonAlias).where(PersonAlias.person_id == remove_person_id)).all():
+        existing = session.scalar(
+            select(PersonAlias).where(
+                PersonAlias.raw_name == alias.raw_name,
+                PersonAlias.source == alias.source,
+                PersonAlias.person_id == keep_person_id,
+            )
+        )
+        if existing is not None:
+            session.delete(alias)
+        else:
+            alias.person_id = keep_person_id
+    session.flush()
+
+    for role, other_role in (("leader_id", "follower_id"), ("follower_id", "leader_id")):
+        role_col = getattr(Partnership, role)
+        other_col = getattr(Partnership, other_role)
+        for partnership in session.scalars(select(Partnership).where(role_col == remove_person_id)).all():
+            other_value = getattr(partnership, other_role)
+            existing = session.scalar(
+                select(Partnership).where(
+                    getattr(Partnership, role) == keep_person_id,
+                    other_col == other_value,
+                    Partnership.kind == partnership.kind,
+                    Partnership.id != partnership.id,
+                )
+            )
+            if existing is not None:
+                session.execute(
+                    update(Entry).where(Entry.partnership_id == partnership.id).values(partnership_id=existing.id)
+                )
+                session.delete(partnership)
+            else:
+                setattr(partnership, role, keep_person_id)
+    session.flush()
+
     session.execute(
         update(Partnership).where(Partnership.student_id == remove_person_id).values(student_id=keep_person_id)
     )
-    session.execute(
-        update(Affiliation).where(Affiliation.person_id == remove_person_id).values(person_id=keep_person_id)
-    )
+
+    for affiliation in session.scalars(select(Affiliation).where(Affiliation.person_id == remove_person_id)).all():
+        existing = session.get(Affiliation, (keep_person_id, affiliation.organization_id))
+        if existing is not None:
+            session.delete(affiliation)
+        else:
+            affiliation.person_id = keep_person_id
+    session.flush()
+
     session.execute(update(Mark).where(Mark.judge_person_id == remove_person_id).values(judge_person_id=keep_person_id))
     session.execute(
         update(ResolutionQueue)
