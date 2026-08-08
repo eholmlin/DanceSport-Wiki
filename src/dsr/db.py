@@ -42,7 +42,16 @@ def get_engine(db_path: Path | str | None = None):
         # file at once. 30s is generous enough for a commit to clear even
         # under load; each individual commit here is small.
         connect_args["timeout"] = 30
-    return create_engine(url, future=True, connect_args=connect_args)
+    # pool_pre_ping: test each pooled connection with a lightweight query
+    # before handing it out, transparently reconnecting if it's gone stale.
+    # Real bug this fixes: Neon (and managed Postgres generally) closes idle
+    # connections server-side; app.py caches the Engine for the whole process
+    # lifetime (st.cache_resource), so without this, the first query after
+    # the app sat idle for a while got a dead connection from the pool and
+    # raised OperationalError -- and stayed broken for every query after
+    # that, since the pool had no way to know the connection was bad, until
+    # someone manually rebooted the app to get a fresh Engine.
+    return create_engine(url, future=True, connect_args=connect_args, pool_pre_ping=True)
 
 
 def init_db(db_path: Path | str | None = None):
