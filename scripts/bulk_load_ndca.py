@@ -22,7 +22,13 @@ from dsr.load.wdsf import load_competition
 from dsr.parse.ndca import ParseError, parse_competition, parse_competitor_feed, parse_roster
 
 BASE = "https://ndcapremier.com"
-SEASONS_TO_SCAN = list(range(20, 50))  # generous range; unknown/empty seasons 404 or error harmlessly
+SEASONS_TO_SCAN = list(range(1, 50))  # generous range; unknown/empty seasons 404 or error harmlessly.
+# NDCA's season numbers don't map 1:1 to calendar years -- they overlap and
+# have gaps (e.g. season 19 covers ~Dec 2020-Dec 2021, season 20 covers
+# ~Nov 2022-Jan 2023, nothing cleanly fills mid-2022) -- so this range is
+# intentionally wide; discover_competitions()'s own date-range filter on
+# each event's actual Start_Date is what determines real inclusion, not
+# this list. Confirmed season 1 = 2006, season 15+ reaches into 2019-2021.
 
 
 def discover_competitions(fetcher: PoliteFetcher, session, start: dt.date, end: dt.date) -> list[tuple[str, str, dt.date]]:

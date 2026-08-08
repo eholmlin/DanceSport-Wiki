@@ -4,7 +4,12 @@
     "allow": [
       "mcp__Claude_Browser__read_page",
       "mcp__Claude_Browser__get_page_text",
-      "Bash(mkdir -p*)"
+      "Bash(mkdir -p*)",
+      "Bash(curl -s -A \"DancesportResultsBot/0.1 \\(contact: eholmlin@gmail.com\\)\" *)",
+      "mcp__Claude_Browser__read_network_requests",
+      "mcp__Claude_Browser__find",
+      "mcp__Claude_Browser__preview_list",
+      "mcp__Claude_Browser__preview_logs"
     ]
   }
 }

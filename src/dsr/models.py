@@ -69,7 +69,7 @@ class PersonAlias(Base):
     __table_args__ = (UniqueConstraint("raw_name", "source", "person_id"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    person_id: Mapped[Optional[int]] = mapped_column(ForeignKey("person.id"))
+    person_id: Mapped[Optional[int]] = mapped_column(ForeignKey("person.id"), index=True)
     raw_name: Mapped[str] = mapped_column(String, nullable=False)
     source: Mapped[str] = mapped_column(String, nullable=False)
     confidence: Mapped[Optional[float]] = mapped_column(Numeric(4, 3))
@@ -166,7 +166,7 @@ class Entry(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     competition_id: Mapped[int] = mapped_column(ForeignKey("competition.id"))
-    partnership_id: Mapped[Optional[int]] = mapped_column(ForeignKey("partnership.id"))
+    partnership_id: Mapped[Optional[int]] = mapped_column(ForeignKey("partnership.id"), index=True)
     competitor_no: Mapped[Optional[str]]  # lead number, as printed
     organization_id: Mapped[Optional[int]] = mapped_column(ForeignKey("organization.id"))
 
@@ -175,7 +175,7 @@ class Round(Base):
     __tablename__ = "round"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    comp_event_id: Mapped[int] = mapped_column(ForeignKey("comp_event.id"))
+    comp_event_id: Mapped[int] = mapped_column(ForeignKey("comp_event.id"), index=True)
     round_type: Mapped[str] = mapped_column(String, nullable=False)  # prelim|redance|quarter|semi|final
     round_order: Mapped[int] = mapped_column(nullable=False)
     entries_in: Mapped[Optional[int]]
@@ -188,7 +188,12 @@ class Mark(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     round_id: Mapped[int] = mapped_column(ForeignKey("round.id"))
-    entry_id: Mapped[int] = mapped_column(ForeignKey("entry.id"))
+    # index=True: queries filtering by entry_id alone (highest-round lookups,
+    # marks totals, judges' marks) couldn't use the composite unique
+    # constraint above since entry_id isn't its leading column -- confirmed
+    # via EXPLAIN QUERY PLAN doing a full "SCAN mark" (4.2s at 13M rows)
+    # instead of using an index, once the dataset grew past one season.
+    entry_id: Mapped[int] = mapped_column(ForeignKey("entry.id"), index=True)
     judge_person_id: Mapped[Optional[int]] = mapped_column(ForeignKey("person.id"))
     dance: Mapped[Optional[str]]
     recalled: Mapped[Optional[bool]] = mapped_column(Boolean)
@@ -199,7 +204,11 @@ class Result(Base):
     __tablename__ = "result"
 
     comp_event_id: Mapped[int] = mapped_column(ForeignKey("comp_event.id"), primary_key=True)
-    entry_id: Mapped[int] = mapped_column(ForeignKey("entry.id"), primary_key=True)
+    # index=True: same reasoning as Mark.entry_id -- entry_id is the second
+    # column of the composite primary key, so filtering by entry_id alone
+    # (e.g. joining Result to Entry by partnership) couldn't use it and did
+    # a full table scan instead (0.9s at 1.3M rows).
+    entry_id: Mapped[int] = mapped_column(ForeignKey("entry.id"), primary_key=True, index=True)
     placement_low: Mapped[Optional[int]]
     placement_high: Mapped[Optional[int]]
     made_final: Mapped[Optional[bool]] = mapped_column(Boolean)
