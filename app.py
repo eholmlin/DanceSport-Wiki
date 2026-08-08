@@ -761,10 +761,15 @@ def dancer_search(session) -> None:
         person = options[choice]
 
     st.header(person.display_name)
-    cols = st.columns(3)
-    cols[0].metric("Country", person.country or "unknown")
-    cols[1].metric("Role", "Adjudicator" if person.is_adjudicator else "Competitor")
-    cols[2].metric("External id on file", "yes" if person.wdsf_min else "no")
+    # Country is only ever known for WDSF-sourced people (NDCA doesn't
+    # capture it) -- shown when we actually have it, hidden rather than a
+    # placeholder "unknown" otherwise, per user request.
+    metrics = [("Role", "Adjudicator" if person.is_adjudicator else "Competitor")]
+    if person.country:
+        metrics.insert(0, ("Country", person.country))
+    cols = st.columns(len(metrics))
+    for col, (label, value) in zip(cols, metrics):
+        col.metric(label, value)
 
     partnerships = partnerships_for_person(session, person.id)
     if not partnerships:
