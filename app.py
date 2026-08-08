@@ -233,24 +233,45 @@ def partner_label(session, partnership: Partnership) -> str:
     return f"{label} [{partnership.kind}]"
 
 
-def partner_category(session, partnership: Partnership, viewed_person_id: int) -> str:
-    """NDCA-only signal: classify a partnership relative to the person being
-    viewed, using the OTHER partner's observed ndca_pro_am_status
-    (backfilled from raw NDCA competitor feeds -- see
-    scripts/backfill_pro_am_status.py; NDCA ids are never trusted as
-    external refs, so this is a display_name match, not an exact join).
-    Lets an instructor's dozens of Pro-Am students be shown separately from
-    their own competitive amateur-couple partnerships, per user request.
-    WDSF partnerships and anyone with no observed status fall into "Other".
+_INSTRUCTOR_TITLE_MARKERS = ("pro am", "proam", "mxam", "mixed am")
+_AMATEUR_TITLE_MARKERS = ("am/am", "amam")
+
+
+def partner_category(session, partnership: Partnership) -> str:
+    """Classify a partnership from the raw_title of every NDCA event it
+    actually entered, not from Person.ndca_pro_am_status (abandoned: that
+    field is an aggregated per-person mode across all registrations, and
+    turned out to be an age classifier ('Y'outh/'A'mateur), not a role
+    signal -- a real instructor like Arsenii Moroz never shows 'P').
+
+    NDCA event titles carry an explicit eligibility marker naming which
+    categories may enter -- "Pro Am"/"ProAm", "MxAm"/"Mixed Am", or
+    "AM/AM"/"AmAm" -- but a single event/heat is often open to *multiple*
+    categories at once (e.g. "ProAm, Mixed Am, AmAm Youth Single..."), with
+    no per-couple field distinguishing which category any specific couple
+    in that heat actually registered under. So a lone title can't be
+    trusted; instead every title this partnership ever competed under is
+    scanned, and a Pro-Am/Mixed-Am marker anywhere is treated as decisive
+    even if some of those same titles also list AmAm as eligible -- a
+    genuinely peer amateur couple's titles never carry a Pro-Am/Mixed-Am
+    marker at all (verified: zero of professional Umario Diallo's 18
+    partnerships land in the amateur bucket, while Arsenii's 3
+    user-confirmed competitive partners -- Sofia Chubay, Emily Tatoosi,
+    Mishella Vishnevskiy -- and 2 more the rule newly surfaced all do).
     """
-    other_id = partnership.follower_id if partnership.leader_id == viewed_person_id else partnership.leader_id
-    other = session.get(Person, other_id) if other_id is not None else None
-    status = other.ndca_pro_am_status if other else None
-    return {
-        "Y": "Students (Pro-Am)",
-        "A": "Competitive partners (Amateur)",
-        "P": "Professional partners",
-    }.get(status, "Other partnerships")
+    titles = session.scalars(
+        select(CompEvent.raw_title)
+        .join(Result, Result.comp_event_id == CompEvent.id)
+        .join(Entry, Entry.id == Result.entry_id)
+        .where(Entry.partnership_id == partnership.id)
+        .distinct()
+    ).all()
+    lowered = [t.lower() for t in titles]
+    if any(marker in t for t in lowered for marker in _INSTRUCTOR_TITLE_MARKERS):
+        return "Instructor-style (Pro-Am)"
+    if any(marker in t for t in lowered for marker in _AMATEUR_TITLE_MARKERS):
+        return "Competitive partners (Amateur)"
+    return "Other partnerships"
 
 
 def search_competitions(session, term: str, limit: int = 25) -> list[Competition]:
@@ -812,18 +833,16 @@ def dancer_search(session) -> None:
     # separate sections when more than one category is actually present.
     categorized: dict[str, list] = {}
     for partnership, df in partnership_dfs:
-        category = partner_category(session, partnership, person.id)
+        category = partner_category(session, partnership)
         categorized.setdefault(category, []).append((partnership, df))
 
     category_order = [
         "Competitive partners (Amateur)",
-        "Professional partners",
-        "Students (Pro-Am)",
+        "Instructor-style (Pro-Am)",
         "Other partnerships",
     ]
     show_headers = sum(1 for c in category_order if categorized.get(c)) > 1
 
-    first = True
     for category in category_order:
         group = categorized.get(category)
         if not group:
@@ -832,8 +851,7 @@ def dancer_search(session) -> None:
             st.markdown(f"**{category}** ({len(group)})")
         for partnership, df in group:
             label = partner_label(session, partnership)
-            with st.expander(f"{label} -- {len(df)} results", expanded=first):
-                first = False
+            with st.expander(f"{label} -- {len(df)} results", expanded=False):
                 if df.empty:
                     st.write("No results on file for this partnership.")
                     continue

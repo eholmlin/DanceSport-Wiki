@@ -12,6 +12,7 @@ from app import (
     best_results,
     marks_detail_for_entry,
     marks_detail_with_totals,
+    partner_category,
     results_for_comp_event,
     skating_system_results_for_final,
 )
@@ -308,3 +309,137 @@ def test_best_results_excludes_not_recalled_rank_and_marks_format():
     )
     result = best_results(df, n=5)
     assert list(result["Placement"]) == ["1", "2.5", "3-4"]
+
+
+def _add_result(session, competition, partnership, raw_title, competitor_no="1"):
+    entry = Entry(competition_id=competition.id, partnership_id=partnership.id, competitor_no=competitor_no)
+    session.add(entry)
+    session.flush()
+    event = CompEvent(competition_id=competition.id, raw_title=raw_title)
+    session.add(event)
+    session.flush()
+    session.add(Result(comp_event_id=event.id, entry_id=entry.id))
+    session.flush()
+
+
+def test_partner_category_abandoned_person_level_pro_am_status_in_favor_of_event_titles(tmp_path):
+    # Real bug: Person.ndca_pro_am_status (an aggregated per-person mode
+    # across all registrations) turned out to be an age classifier
+    # ('Y'outh/'A'mateur), not a role signal -- a real Pro-Am instructor,
+    # Arsenii Moroz, never showed 'P', and his own mode status came out 'A'
+    # despite clearly being an instructor. Replaced with a per-partnership
+    # scan of the raw NDCA event titles that partnership actually entered:
+    # any title carrying a "Pro Am"/"ProAm"/"MxAm"/"Mixed Am" marker is
+    # decisive, even when other titles for the same partnership also list
+    # "AM/AM" as eligible (NDCA events are often open to several categories
+    # at once, with no per-couple field saying which one a given couple
+    # registered under -- so Pro-Am/Mixed-Am is treated as the stronger
+    # signal). Verified against real data: a real professional's (Umario
+    # Diallo) 18 partnerships never land in the amateur bucket, while an
+    # instructor's (Arsenii Moroz) 3 user-confirmed genuine competitive
+    # partners do.
+    engine = init_db(tmp_path / "partner_category.sqlite3")
+    session = get_session(engine)
+
+    competition = Competition(source="ndca_premier", source_code="1", name="Test Comp")
+    session.add(competition)
+    session.flush()
+
+    instructor = Person(display_name="Instructor")
+    student = Person(display_name="Student")
+    session.add_all([instructor, student])
+    session.flush()
+
+    partnership = Partnership(leader_id=instructor.id, follower_id=student.id, kind="pro_am")
+    session.add(partnership)
+    session.flush()
+
+    _add_result(session, competition, partnership, "ProAm Youth Scholarship Int'l Latin")
+    session.commit()
+
+    assert partner_category(session, partnership) == "Instructor-style (Pro-Am)"
+
+
+def test_partner_category_treats_combined_title_as_instructor_style(tmp_path):
+    # A single NDCA event is often open to multiple eligibility categories
+    # at once (e.g. "ProAm, Mixed Am, AmAm Youth Single..."), with no field
+    # distinguishing which category a specific couple in that heat actually
+    # registered under -- so a partnership whose only titles are a mix of
+    # AmAm-eligible *and* Pro-Am/Mixed-Am-eligible events is still bucketed
+    # as instructor-style, not competitive: a genuinely peer amateur couple
+    # (verified against real data) never has a Pro-Am/Mixed-Am marker in
+    # any of its titles at all.
+    engine = init_db(tmp_path / "partner_category_combined.sqlite3")
+    session = get_session(engine)
+
+    competition = Competition(source="ndca_premier", source_code="1", name="Test Comp")
+    session.add(competition)
+    session.flush()
+
+    instructor = Person(display_name="Instructor")
+    student = Person(display_name="Student")
+    session.add_all([instructor, student])
+    session.flush()
+
+    partnership = Partnership(leader_id=instructor.id, follower_id=student.id, kind="pro_am")
+    session.add(partnership)
+    session.flush()
+
+    _add_result(session, competition, partnership, "ProAm, Mixed Am, AmAm Youth Single LG-YH Op. Full Gold Int'l Cha Cha")
+    session.commit()
+
+    assert partner_category(session, partnership) == "Instructor-style (Pro-Am)"
+
+
+def test_partner_category_treats_two_students_as_a_competitive_pair_not_instructor(tmp_path):
+    # Confirmed with the user: a partnership whose event titles only ever
+    # carry the "AM/AM" marker, never "Pro Am"/"MxAm", is a genuine
+    # competitive amateur couple -- even though each partner may separately
+    # be a Pro-Am student in other partnerships (real case: Matvii
+    # Artiushenko & Sofia Chubay).
+    engine = init_db(tmp_path / "partner_category_peer.sqlite3")
+    session = get_session(engine)
+
+    competition = Competition(source="ndca_premier", source_code="1", name="Test Comp")
+    session.add(competition)
+    session.flush()
+
+    student_a = Person(display_name="Student A")
+    student_b = Person(display_name="Student B")
+    session.add_all([student_a, student_b])
+    session.flush()
+
+    partnership = Partnership(leader_id=student_a.id, follower_id=student_b.id, kind="amateur")
+    session.add(partnership)
+    session.flush()
+
+    _add_result(session, competition, partnership, "Challenges Closed Bronze P1 AM/AM Int'l Latin (CC,R,J)")
+    session.commit()
+
+    assert partner_category(session, partnership) == "Competitive partners (Amateur)"
+
+
+def test_partner_category_falls_back_to_other_when_no_title_marker_present(tmp_path):
+    # A real residual: some partnerships' event titles carry no eligibility
+    # marker at all (real case: Umario Diallo & Zhihai Li, across all 28 of
+    # their shared event titles) -- neither bucket should claim these.
+    engine = init_db(tmp_path / "partner_category_unmarked.sqlite3")
+    session = get_session(engine)
+
+    competition = Competition(source="ndca_premier", source_code="1", name="Test Comp")
+    session.add(competition)
+    session.flush()
+
+    leader = Person(display_name="Leader")
+    follower = Person(display_name="Follower")
+    session.add_all([leader, follower])
+    session.flush()
+
+    partnership = Partnership(leader_id=leader.id, follower_id=follower.id, kind="amateur")
+    session.add(partnership)
+    session.flush()
+
+    _add_result(session, competition, partnership, "Single Dance L-A3 Op. Advanced Int'l Cha Cha")
+    session.commit()
+
+    assert partner_category(session, partnership) == "Other partnerships"
