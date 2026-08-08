@@ -357,7 +357,7 @@ def test_partner_category_abandoned_person_level_pro_am_status_in_favor_of_event
     _add_result(session, competition, partnership, "ProAm Youth Scholarship Int'l Latin")
     session.commit()
 
-    assert partner_category(session, partnership) == "Instructor-style (Pro-Am)"
+    assert partner_category(session, partnership) == "Instructor-style"
 
 
 def test_partner_category_treats_combined_title_as_instructor_style(tmp_path):
@@ -388,7 +388,7 @@ def test_partner_category_treats_combined_title_as_instructor_style(tmp_path):
     _add_result(session, competition, partnership, "ProAm, Mixed Am, AmAm Youth Single LG-YH Op. Full Gold Int'l Cha Cha")
     session.commit()
 
-    assert partner_category(session, partnership) == "Instructor-style (Pro-Am)"
+    assert partner_category(session, partnership) == "Instructor-style"
 
 
 def test_partner_category_treats_two_students_as_a_competitive_pair_not_instructor(tmp_path):
@@ -416,14 +416,17 @@ def test_partner_category_treats_two_students_as_a_competitive_pair_not_instruct
     _add_result(session, competition, partnership, "Challenges Closed Bronze P1 AM/AM Int'l Latin (CC,R,J)")
     session.commit()
 
-    assert partner_category(session, partnership) == "Competitive partners (Amateur)"
+    assert partner_category(session, partnership) == "Competitive partners"
 
 
-def test_partner_category_falls_back_to_other_when_no_title_marker_present(tmp_path):
-    # A real residual: some partnerships' event titles carry no eligibility
-    # marker at all (real case: Umario Diallo & Zhihai Li, across all 28 of
-    # their shared event titles) -- neither bucket should claim these.
-    engine = init_db(tmp_path / "partner_category_unmarked.sqlite3")
+def test_partner_category_treats_unmarked_multi_dance_as_competitive(tmp_path):
+    # Per user direction: an unmarked title that isn't single-dance is
+    # assumed competitive rather than left ambiguous, since NDCA doesn't
+    # always spell out "AM/AM" on events that are amateur-only by
+    # construction (real case: Sofia Chubay & Daniel Saba's "Amateur
+    # PreChampionship 4-Dance"/"Amateur Open 4/5-Dance" titles never say
+    # "AM/AM" but aren't Pro-Am/Mixed-Am either).
+    engine = init_db(tmp_path / "partner_category_unmarked_multi.sqlite3")
     session = get_session(engine)
 
     competition = Competition(source="ndca_premier", source_code="1", name="Test Comp")
@@ -439,7 +442,58 @@ def test_partner_category_falls_back_to_other_when_no_title_marker_present(tmp_p
     session.add(partnership)
     session.flush()
 
-    _add_result(session, competition, partnership, "Single Dance L-A3 Op. Advanced Int'l Cha Cha")
+    _add_result(session, competition, partnership, "Amateur PreChampionship 4-Dance P2 Int'l Latin (CC,S,R,J)")
+    _add_result(session, competition, partnership, "Amateur Open 4/5-Dance P2 Int'l Latin (CC,S,R,PD,J)", competitor_no="2")
+    session.commit()
+
+    assert partner_category(session, partnership) == "Competitive partners"
+
+
+def test_partner_category_falls_back_to_other_when_no_titles_at_all(tmp_path):
+    # Genuine residual: a partnership with no event titles on record at
+    # all (e.g. no Result rows yet) -- neither bucket applies.
+    engine = init_db(tmp_path / "partner_category_no_titles.sqlite3")
+    session = get_session(engine)
+
+    leader = Person(display_name="Leader")
+    follower = Person(display_name="Follower")
+    session.add_all([leader, follower])
+    session.flush()
+
+    partnership = Partnership(leader_id=leader.id, follower_id=follower.id, kind="amateur")
+    session.add(partnership)
     session.commit()
 
     assert partner_category(session, partnership) == "Other partnerships"
+
+
+def test_partner_category_treats_all_single_dance_titles_as_instructor_style(tmp_path):
+    # Second-tier signal when no title carries an explicit marker: a
+    # partnership whose *every* title is an isolated "Single Dance" event
+    # (never multi-dance/scholarship/championship) is how a coach runs a
+    # beginner Pro-Am student through their first events one dance at a
+    # time -- real case: 4 of Arsenii Moroz's unmarked partnerships (Ava
+    # Marukhyan, Penelope Moskovyan, Ariana Harutyunyan, Victoria Avanesov)
+    # are 100% single-dance, vs. 0% for each of his 4 confirmed genuine
+    # competitive partners.
+    engine = init_db(tmp_path / "partner_category_single_dance.sqlite3")
+    session = get_session(engine)
+
+    competition = Competition(source="ndca_premier", source_code="1", name="Test Comp")
+    session.add(competition)
+    session.flush()
+
+    instructor = Person(display_name="Instructor")
+    student = Person(display_name="Student")
+    session.add_all([instructor, student])
+    session.flush()
+
+    partnership = Partnership(leader_id=instructor.id, follower_id=student.id, kind="pro_am")
+    session.add(partnership)
+    session.flush()
+
+    _add_result(session, competition, partnership, "Kids Single Dances mL-T2 Cl. Full Bronze Int'l Cha Cha")
+    _add_result(session, competition, partnership, "Kids Single Dances mL-T2 Cl. Full Bronze Int'l Samba", competitor_no="2")
+    session.commit()
+
+    assert partner_category(session, partnership) == "Instructor-style"

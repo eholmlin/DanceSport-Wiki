@@ -4,6 +4,8 @@ Run with: streamlit run app.py
 """
 from __future__ import annotations
 
+import datetime as dt
+
 import pandas as pd
 import streamlit as st
 from sqlalchemy import func, or_, select
@@ -223,14 +225,18 @@ def best_results(df: pd.DataFrame, n: int = 5) -> pd.DataFrame:
 
 
 def partner_label(session, partnership: Partnership) -> str:
+    # No partnership.kind suffix here: that field is a load-time guess
+    # ("amateur" for basically everything), not the same signal as
+    # partner_category's per-event-title classification -- showing both
+    # together read as contradictory (e.g. "[amateur]" on a partnership
+    # already grouped under "Instructor-style").
     parts = []
     for pid in (partnership.leader_id, partnership.follower_id):
         if pid is not None:
             p = session.get(Person, pid)
             if p is not None:
                 parts.append(p.display_name)
-    label = " & ".join(parts) if parts else "(solo)"
-    return f"{label} [{partnership.kind}]"
+    return " & ".join(parts) if parts else "(solo)"
 
 
 _INSTRUCTOR_TITLE_MARKERS = ("pro am", "proam", "mxam", "mixed am")
@@ -258,6 +264,31 @@ def partner_category(session, partnership: Partnership) -> str:
     partnerships land in the amateur bucket, while Arsenii's 3
     user-confirmed competitive partners -- Sofia Chubay, Emily Tatoosi,
     Mishella Vishnevskiy -- and 2 more the rule newly surfaced all do).
+
+    When no title carries any marker at all, two more signals apply, in
+    order:
+
+    1. Every title is an isolated "Single Dance" event (never multi-dance/
+    scholarship/championship) -- how a coach runs a beginner Pro-Am student
+    through their first events one dance at a time (verified: Arsenii
+    Moroz's 4 confirmed competitive partners are 0% single-dance each,
+    while 4 of his unmarked partnerships are 100% single-dance each -- a
+    clean split, no overlap). Intentionally narrow (100% single-dance, not
+    just "mostly"): it does NOT generalize to every unmarked partnership --
+    Umario Diallo's own unmarked partnerships are mostly *not*
+    single-dance-heavy despite him being a confirmed professional, so those
+    fall through to the next rule instead.
+
+    2. Otherwise (a real multi-dance/scholarship/championship title exists
+    but never carries a Pro-Am/Mixed-Am marker) -- per user direction, an
+    unmarked multi-dance format is assumed competitive rather than left
+    ambiguous, since NDCA doesn't always bother spelling out "AM/AM" on
+    events that are amateur-only by construction (real case: Sofia Chubay &
+    Daniel Saba's "Amateur PreChampionship 4-Dance"/"Amateur Open 4/5-Dance"
+    titles never say "AM/AM" but are clearly not Pro-Am/Mixed-Am either).
+
+    "Other partnerships" is now reachable only when a partnership has no
+    event titles on record at all.
     """
     titles = session.scalars(
         select(CompEvent.raw_title)
@@ -266,12 +297,16 @@ def partner_category(session, partnership: Partnership) -> str:
         .where(Entry.partnership_id == partnership.id)
         .distinct()
     ).all()
+    if not titles:
+        return "Other partnerships"
     lowered = [t.lower() for t in titles]
     if any(marker in t for t in lowered for marker in _INSTRUCTOR_TITLE_MARKERS):
-        return "Instructor-style (Pro-Am)"
+        return "Instructor-style"
     if any(marker in t for t in lowered for marker in _AMATEUR_TITLE_MARKERS):
-        return "Competitive partners (Amateur)"
-    return "Other partnerships"
+        return "Competitive partners"
+    if all("single dance" in t for t in lowered):
+        return "Instructor-style"
+    return "Competitive partners"
 
 
 def search_competitions(session, term: str, limit: int = 25) -> list[Competition]:
@@ -818,10 +853,15 @@ def dancer_search(session) -> None:
         return
 
     # Each partnership's results are pulled once, then partnerships are shown
-    # most-active-first -- with dozens of Pro-Am students this keeps the page
-    # navigable instead of one giant mixed table (per user feedback).
+    # most-recent-result-first -- with dozens of Pro-Am students this keeps
+    # the page navigable instead of one giant mixed table (per user
+    # feedback), and surfaces a dancer's current partners ahead of old ones
+    # they haven't competed with in years. result_history_for_partnership
+    # already orders rows by Competition.start_date descending, so each
+    # df's first row is that partnership's latest result; empty-result
+    # partnerships (no Date to sort by) sort last.
     partnership_dfs = [(p, result_history_for_partnership(session, p.id)) for p in partnerships]
-    partnership_dfs.sort(key=lambda pair: len(pair[1]), reverse=True)
+    partnership_dfs.sort(key=lambda pair: pair[1]["Date"].iloc[0] if not pair[1].empty else dt.date.min, reverse=True)
 
     total_results = sum(len(df) for _, df in partnership_dfs)
     st.subheader(f"Partnerships ({len(partnerships)}) -- {total_results} results total")
@@ -837,8 +877,8 @@ def dancer_search(session) -> None:
         categorized.setdefault(category, []).append((partnership, df))
 
     category_order = [
-        "Competitive partners (Amateur)",
-        "Instructor-style (Pro-Am)",
+        "Competitive partners",
+        "Instructor-style",
         "Other partnerships",
     ]
     show_headers = sum(1 for c in category_order if categorized.get(c)) > 1
