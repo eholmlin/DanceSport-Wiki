@@ -233,6 +233,26 @@ def partner_label(session, partnership: Partnership) -> str:
     return f"{label} [{partnership.kind}]"
 
 
+def partner_category(session, partnership: Partnership, viewed_person_id: int) -> str:
+    """NDCA-only signal: classify a partnership relative to the person being
+    viewed, using the OTHER partner's observed ndca_pro_am_status
+    (backfilled from raw NDCA competitor feeds -- see
+    scripts/backfill_pro_am_status.py; NDCA ids are never trusted as
+    external refs, so this is a display_name match, not an exact join).
+    Lets an instructor's dozens of Pro-Am students be shown separately from
+    their own competitive amateur-couple partnerships, per user request.
+    WDSF partnerships and anyone with no observed status fall into "Other".
+    """
+    other_id = partnership.follower_id if partnership.leader_id == viewed_person_id else partnership.leader_id
+    other = session.get(Person, other_id) if other_id is not None else None
+    status = other.ndca_pro_am_status if other else None
+    return {
+        "Y": "Students (Pro-Am)",
+        "A": "Competitive partners (Amateur)",
+        "P": "Professional partners",
+    }.get(status, "Other partnerships")
+
+
 def search_competitions(session, term: str, limit: int = 25) -> list[Competition]:
     term_like = f"%{term}%"
     stmt = select(Competition).where(Competition.name.ilike(term_like)).order_by(Competition.start_date.desc()).limit(limit)
@@ -785,19 +805,45 @@ def dancer_search(session) -> None:
     total_results = sum(len(df) for _, df in partnership_dfs)
     st.subheader(f"Partnerships ({len(partnerships)}) -- {total_results} results total")
 
-    for i, (partnership, df) in enumerate(partnership_dfs):
-        label = partner_label(session, partnership)
-        with st.expander(f"{label} -- {len(df)} results", expanded=(i == 0)):
-            if df.empty:
-                st.write("No results on file for this partnership.")
-                continue
+    # Group by category (students vs. amateur-couple partners vs.
+    # professional partners) when we have the signal for it -- an
+    # instructor with dozens of Pro-Am students otherwise mixes them into
+    # one flat list with their own competitive partnerships. Only shown as
+    # separate sections when more than one category is actually present.
+    categorized: dict[str, list] = {}
+    for partnership, df in partnership_dfs:
+        category = partner_category(session, partnership, person.id)
+        categorized.setdefault(category, []).append((partnership, df))
 
-            st.dataframe(df, use_container_width=True, hide_index=True)
+    category_order = [
+        "Competitive partners (Amateur)",
+        "Professional partners",
+        "Students (Pro-Am)",
+        "Other partnerships",
+    ]
+    show_headers = sum(1 for c in category_order if categorized.get(c)) > 1
 
-            best = best_results(df)
-            if not best.empty:
-                st.write("**Best results**")
-                st.dataframe(best, use_container_width=True, hide_index=True)
+    first = True
+    for category in category_order:
+        group = categorized.get(category)
+        if not group:
+            continue
+        if show_headers:
+            st.markdown(f"**{category}** ({len(group)})")
+        for partnership, df in group:
+            label = partner_label(session, partnership)
+            with st.expander(f"{label} -- {len(df)} results", expanded=first):
+                first = False
+                if df.empty:
+                    st.write("No results on file for this partnership.")
+                    continue
+
+                st.dataframe(df, use_container_width=True, hide_index=True)
+
+                best = best_results(df)
+                if not best.empty:
+                    st.write("**Best results**")
+                    st.dataframe(best, use_container_width=True, hide_index=True)
 
 
 def main() -> None:

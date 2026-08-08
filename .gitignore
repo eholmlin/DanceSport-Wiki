@@ -9,6 +9,7 @@ __pycache__/
 htmlcov/
 data/raw/
 data/.ndca_reprocess_checkpoint
+data/.pro_am_backfill_checkpoint
 *.db
 *.sqlite
 *.sqlite3

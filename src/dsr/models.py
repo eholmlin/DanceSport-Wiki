@@ -59,6 +59,14 @@ class Person(Base):
     country: Mapped[Optional[str]]
     is_adjudicator: Mapped[bool] = mapped_column(Boolean, default=False)
     is_professional: Mapped[bool] = mapped_column(Boolean, default=False)
+    # NDCA's raw competitor feed carries a per-registration Pro_Am_Status:
+    # 'A' (amateur), 'P' (professional), 'Y' (the amateur/student half of a
+    # pro-am pairing) -- not an external ID (NDCA ids are never trusted as
+    # external refs, see resolve/entities.py), just an observed classification
+    # backfilled from already-stored raw documents by matching display_name.
+    # Lets the app separate a Pro-Am instructor's students from their
+    # amateur-couple competitive partners (see scripts/backfill_pro_am_status.py).
+    ndca_pro_am_status: Mapped[Optional[str]] = mapped_column(String)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
     )
