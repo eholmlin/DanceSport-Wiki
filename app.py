@@ -34,7 +34,30 @@ def _session():
     return get_session(_engine())
 
 
-def search_people(session, term: str, limit: int = 25) -> list[Person]:
+def _db_identity(session) -> str:
+    """Stable, hashable stand-in for "which database this session talks
+    to" -- passed alongside the underscore-prefixed (unhashed) session to
+    every @st.cache_data-cached query below. Without this, two different
+    databases that happen to reuse the same primary key (e.g. two
+    from-scratch test databases each starting ids at 1, or a local dev DB
+    reset to a fresh file) would collide in the cache, since the session
+    object itself is deliberately excluded from the cache key -- a real
+    bug caught by the test suite reusing partnership id=1 across isolated
+    per-test databases within one process."""
+    return str(session.get_bind().url)
+
+
+@st.cache_data(ttl=600)
+def search_people(_session, db_identity: str, term: str, limit: int = 25) -> list[Person]:
+    # Cached (leading underscore excludes _session from the cache key, per
+    # Streamlit convention -- a fresh Session object every rerun would
+    # otherwise defeat the cache entirely) since re-searching the same name
+    # is common and this is the first of several round trips a search
+    # triggers. Safe to cache the returned Person rows themselves: nothing
+    # in models.py uses SQLAlchemy relationship() (every association is a
+    # plain FK id column resolved manually via session.get), and these
+    # read-only paths never call session.commit(), so there's no lazy-load
+    # or expire_on_commit pitfall from handing back detached instances.
     term_like = f"%{term}%"
     alias_person_ids = select(PersonAlias.person_id).where(PersonAlias.raw_name.ilike(term_like))
     stmt = (
@@ -43,10 +66,12 @@ def search_people(session, term: str, limit: int = 25) -> list[Person]:
         .order_by(Person.display_name)
         .limit(limit)
     )
-    return list(session.scalars(stmt).all())
+    return list(_session.scalars(stmt).all())
 
 
-def partnerships_for_person(session, person_id: int) -> list[Partnership]:
+@st.cache_data(ttl=600)
+def partnerships_for_person(_session, db_identity: str, person_id: int) -> list[Partnership]:
+    """Cached -- see search_people's docstring for why this is safe."""
     stmt = select(Partnership).where(
         or_(
             Partnership.leader_id == person_id,
@@ -54,7 +79,7 @@ def partnerships_for_person(session, person_id: int) -> list[Partnership]:
             Partnership.student_id == person_id,
         )
     )
-    return list(session.scalars(stmt).all())
+    return list(_session.scalars(stmt).all())
 
 
 _rounds_by_comp_event_cache: dict[int, list[Round]] = {}
@@ -151,7 +176,8 @@ def marks_totals_for_entries_in_round(session, entry_round_ids: set[tuple[int, i
     return totals
 
 
-def result_histories_for_partnerships(session, partnership_ids: list[int]) -> dict[int, pd.DataFrame]:
+@st.cache_data(ttl=600)
+def result_histories_for_partnerships(_session, db_identity: str, partnership_ids: list[int]) -> dict[int, pd.DataFrame]:
     """Batched version of result_history_for_partnership: one query for
     every partnership's results at once instead of one query per
     partnership. Locally (SQLite, ~0 round-trip cost) a per-partnership
@@ -162,7 +188,11 @@ def result_histories_for_partnerships(session, partnership_ids: list[int]) -> di
     dev. Also batches _highest_round_labels_for_entries (already itself
     batched, but was still being called once per partnership) and the
     not-recalled results_for_comp_event cache (now shared across every
-    partnership on the page, not just within one)."""
+    partnership on the page, not just within one).
+
+    Cached (see search_people's docstring for why this is safe) since
+    re-viewing the same dancer is common, and this is the single most
+    expensive query on the page."""
     if not partnership_ids:
         return {}
     stmt = (
@@ -174,9 +204,9 @@ def result_histories_for_partnerships(session, partnership_ids: list[int]) -> di
         .where(Entry.partnership_id.in_(partnership_ids))
         .order_by(Competition.start_date.desc())
     )
-    result_rows = session.execute(stmt).all()
+    result_rows = _session.execute(stmt).all()
     highest_round_by_key = _highest_round_labels_for_entries(
-        session, [(entry.id, comp_event.id) for _, comp_event, entry, _ in result_rows]
+        _session, [(entry.id, comp_event.id) for _, comp_event, entry, _ in result_rows]
     )
 
     # Not-recalled rows reuse _field_results_for_comp_events' own Placement
@@ -191,7 +221,7 @@ def result_histories_for_partnerships(session, partnership_ids: list[int]) -> di
     not_recalled_event_ids = {
         comp_event.id for _, comp_event, _, result in result_rows if result.placement_low is None
     }
-    event_results_cache = _field_results_for_comp_events(session, list(not_recalled_event_ids))
+    event_results_cache = _field_results_for_comp_events(_session, list(not_recalled_event_ids))
 
     rows_by_partnership: dict[int, list[dict]] = {pid: [] for pid in partnership_ids}
     for competition, comp_event, entry, result in result_rows:
@@ -205,7 +235,7 @@ def result_histories_for_partnerships(session, partnership_ids: list[int]) -> di
             placement = f"{result.placement_low}-{result.placement_high}"
         _round_id, _round_order, highest_round = highest_round_by_key.get(
             (entry.id, comp_event.id)
-        ) or _highest_round_fallback(session, comp_event.id, result.placement_low)
+        ) or _highest_round_fallback(_session, comp_event.id, result.placement_low)
         rows_by_partnership[entry.partnership_id].append(
             {
                 "Date": competition.start_date,
@@ -224,7 +254,7 @@ def result_histories_for_partnerships(session, partnership_ids: list[int]) -> di
 def result_history_for_partnership(session, partnership_id: int) -> pd.DataFrame:
     """Single-partnership convenience wrapper -- see result_histories_for_partnerships
     (used by the dancer page, which needs every partnership's history at once)."""
-    return result_histories_for_partnerships(session, [partnership_id])[partnership_id]
+    return result_histories_for_partnerships(session, _db_identity(session), [partnership_id])[partnership_id]
 
 
 def best_results(df: pd.DataFrame, n: int = 5) -> pd.DataFrame:
@@ -323,7 +353,8 @@ def _classify_titles(titles: list[str]) -> str:
     return "Competitive partners"
 
 
-def partner_categories_for_partnerships(session, partnership_ids: list[int]) -> dict[int, str]:
+@st.cache_data(ttl=600)
+def partner_categories_for_partnerships(_session, db_identity: str, partnership_ids: list[int]) -> dict[int, str]:
     """Batched version of partner_category: one query for every
     partnership's titles at once instead of one query per partnership.
     Locally (SQLite, ~0 round-trip cost) a per-partnership query loop was
@@ -331,10 +362,13 @@ def partner_categories_for_partnerships(session, partnership_ids: list[int]) -> 
     costs ~85ms, so a dancer with dozens of partnerships spent seconds on
     this alone -- a real N+1-at-the-partnership-level bug only apparent
     under real network latency, not local dev (see also
-    result_histories_for_partnerships, same rationale)."""
+    result_histories_for_partnerships, same rationale).
+
+    Cached (see search_people's docstring for why this is safe) since
+    re-viewing the same dancer is common."""
     if not partnership_ids:
         return {}
-    rows = session.execute(
+    rows = _session.execute(
         select(Entry.partnership_id, CompEvent.raw_title)
         .select_from(Result)
         .join(Entry, Entry.id == Result.entry_id)
@@ -351,7 +385,7 @@ def partner_categories_for_partnerships(session, partnership_ids: list[int]) -> 
 def partner_category(session, partnership: Partnership) -> str:
     """Single-partnership convenience wrapper -- see partner_categories_for_partnerships
     (used by the dancer page, which needs every partnership's category at once)."""
-    return partner_categories_for_partnerships(session, [partnership.id])[partnership.id]
+    return partner_categories_for_partnerships(session, _db_identity(session), [partnership.id])[partnership.id]
 
 
 def search_competitions(session, term: str, limit: int = 25) -> list[Competition]:
@@ -896,12 +930,13 @@ def competition_search(session) -> None:
 
 
 def dancer_search(session) -> None:
+    db_identity = _db_identity(session)
     term = st.text_input("Search for a dancer by name", "", key="dancer_search_term")
     if not term:
         st.info("Type a name above to search (matches display name and any known alias spelling).")
         return
 
-    people = search_people(session, term)
+    people = search_people(session, db_identity, term)
     if not people:
         st.warning(f"No one found matching {term!r}.")
         return
@@ -924,7 +959,7 @@ def dancer_search(session) -> None:
     for col, (label, value) in zip(cols, metrics):
         col.metric(label, value)
 
-    partnerships = partnerships_for_person(session, person.id)
+    partnerships = partnerships_for_person(session, db_identity, person.id)
     if not partnerships:
         st.warning("No partnerships/entries on file for this person yet.")
         return
@@ -937,8 +972,8 @@ def dancer_search(session) -> None:
     # ~0 round-trip cost) but ~20s against a real network database (Neon,
     # ~85ms/round-trip) before this batching.
     partnership_ids = [p.id for p in partnerships]
-    histories_by_id = result_histories_for_partnerships(session, partnership_ids)
-    categories_by_id = partner_categories_for_partnerships(session, partnership_ids)
+    histories_by_id = result_histories_for_partnerships(session, db_identity, partnership_ids)
+    categories_by_id = partner_categories_for_partnerships(session, db_identity, partnership_ids)
 
     # Partnerships are shown most-recent-result-first -- with dozens of
     # Pro-Am students this keeps the page navigable instead of one giant
