@@ -151,14 +151,27 @@ def marks_totals_for_entries_in_round(session, entry_round_ids: set[tuple[int, i
     return totals
 
 
-def result_history_for_partnership(session, partnership_id: int) -> pd.DataFrame:
+def result_histories_for_partnerships(session, partnership_ids: list[int]) -> dict[int, pd.DataFrame]:
+    """Batched version of result_history_for_partnership: one query for
+    every partnership's results at once instead of one query per
+    partnership. Locally (SQLite, ~0 round-trip cost) a per-partnership
+    query loop was invisible; against a real network database (Neon) each
+    round trip costs ~85ms, so a dancer with dozens of partnerships spent
+    ~15s on this alone before batching -- a real N+1-at-the-partnership-
+    level bug that only shows up under real network latency, not local
+    dev. Also batches _highest_round_labels_for_entries (already itself
+    batched, but was still being called once per partnership) and the
+    not-recalled results_for_comp_event cache (now shared across every
+    partnership on the page, not just within one)."""
+    if not partnership_ids:
+        return {}
     stmt = (
         select(Competition, CompEvent, Entry, Result)
         .select_from(Result)
         .join(Entry, Result.entry_id == Entry.id)
         .join(CompEvent, Result.comp_event_id == CompEvent.id)
         .join(Competition, CompEvent.competition_id == Competition.id)
-        .where(Entry.partnership_id == partnership_id)
+        .where(Entry.partnership_id.in_(partnership_ids))
         .order_by(Competition.start_date.desc())
     )
     result_rows = session.execute(stmt).all()
@@ -166,21 +179,23 @@ def result_history_for_partnership(session, partnership_id: int) -> pd.DataFrame
         session, [(entry.id, comp_event.id) for _, comp_event, entry, _ in result_rows]
     )
 
-    # Not-recalled rows reuse results_for_comp_event's own Placement string
-    # (e.g. "9th (10 marks)") rather than recomputing the same field-wide
-    # ranking here -- that keeps the dancer view and the competition view
-    # permanently in agreement instead of drifting out of sync, and this was
-    # the bug: the dancer view still showed a bare "not recalled" after the
-    # competition view was changed to show rank + marks. One
-    # results_for_comp_event call per not-recalled event (cached here so a
-    # repeat event isn't recomputed), not per row.
-    event_results_cache: dict[int, pd.DataFrame] = {}
+    # Not-recalled rows reuse _field_results_for_comp_events' own Placement
+    # string (e.g. "9th (10 marks)") rather than recomputing the same
+    # field-wide ranking here -- that keeps the dancer view and the
+    # competition view permanently in agreement instead of drifting out of
+    # sync, and this was the bug: the dancer view still showed a bare "not
+    # recalled" after the competition view was changed to show rank +
+    # marks. Every distinct not-recalled event across the whole batch is
+    # fetched in one shot up front (not one call per event) -- see
+    # _field_results_for_comp_events' own docstring for why that mattered.
+    not_recalled_event_ids = {
+        comp_event.id for _, comp_event, _, result in result_rows if result.placement_low is None
+    }
+    event_results_cache = _field_results_for_comp_events(session, list(not_recalled_event_ids))
 
-    rows = []
+    rows_by_partnership: dict[int, list[dict]] = {pid: [] for pid in partnership_ids}
     for competition, comp_event, entry, result in result_rows:
         if result.placement_low is None:
-            if comp_event.id not in event_results_cache:
-                event_results_cache[comp_event.id] = results_for_comp_event(session, comp_event.id)
             event_df = event_results_cache[comp_event.id]
             match = event_df.loc[event_df["_entry_id"] == entry.id, "Placement"]
             placement = match.iloc[0] if not match.empty else "not recalled"
@@ -191,7 +206,7 @@ def result_history_for_partnership(session, partnership_id: int) -> pd.DataFrame
         _round_id, _round_order, highest_round = highest_round_by_key.get(
             (entry.id, comp_event.id)
         ) or _highest_round_fallback(session, comp_event.id, result.placement_low)
-        rows.append(
+        rows_by_partnership[entry.partnership_id].append(
             {
                 "Date": competition.start_date,
                 "Competition": competition.name,
@@ -203,7 +218,13 @@ def result_history_for_partnership(session, partnership_id: int) -> pd.DataFrame
                 "Start #": entry.competitor_no,
             }
         )
-    return pd.DataFrame(rows)
+    return {pid: pd.DataFrame(rows) for pid, rows in rows_by_partnership.items()}
+
+
+def result_history_for_partnership(session, partnership_id: int) -> pd.DataFrame:
+    """Single-partnership convenience wrapper -- see result_histories_for_partnerships
+    (used by the dancer page, which needs every partnership's history at once)."""
+    return result_histories_for_partnerships(session, [partnership_id])[partnership_id]
 
 
 def best_results(df: pd.DataFrame, n: int = 5) -> pd.DataFrame:
@@ -243,7 +264,7 @@ _INSTRUCTOR_TITLE_MARKERS = ("pro am", "proam", "mxam", "mixed am")
 _AMATEUR_TITLE_MARKERS = ("am/am", "amam")
 
 
-def partner_category(session, partnership: Partnership) -> str:
+def _classify_titles(titles: list[str]) -> str:
     """Classify a partnership from the raw_title of every NDCA event it
     actually entered, not from Person.ndca_pro_am_status (abandoned: that
     field is an aggregated per-person mode across all registrations, and
@@ -290,13 +311,6 @@ def partner_category(session, partnership: Partnership) -> str:
     "Other partnerships" is now reachable only when a partnership has no
     event titles on record at all.
     """
-    titles = session.scalars(
-        select(CompEvent.raw_title)
-        .join(Result, Result.comp_event_id == CompEvent.id)
-        .join(Entry, Entry.id == Result.entry_id)
-        .where(Entry.partnership_id == partnership.id)
-        .distinct()
-    ).all()
     if not titles:
         return "Other partnerships"
     lowered = [t.lower() for t in titles]
@@ -307,6 +321,37 @@ def partner_category(session, partnership: Partnership) -> str:
     if all("single dance" in t for t in lowered):
         return "Instructor-style"
     return "Competitive partners"
+
+
+def partner_categories_for_partnerships(session, partnership_ids: list[int]) -> dict[int, str]:
+    """Batched version of partner_category: one query for every
+    partnership's titles at once instead of one query per partnership.
+    Locally (SQLite, ~0 round-trip cost) a per-partnership query loop was
+    invisible; against a real network database (Neon) each round trip
+    costs ~85ms, so a dancer with dozens of partnerships spent seconds on
+    this alone -- a real N+1-at-the-partnership-level bug only apparent
+    under real network latency, not local dev (see also
+    result_histories_for_partnerships, same rationale)."""
+    if not partnership_ids:
+        return {}
+    rows = session.execute(
+        select(Entry.partnership_id, CompEvent.raw_title)
+        .select_from(Result)
+        .join(Entry, Entry.id == Result.entry_id)
+        .join(CompEvent, Result.comp_event_id == CompEvent.id)
+        .where(Entry.partnership_id.in_(partnership_ids))
+        .distinct()
+    ).all()
+    titles_by_partnership: dict[int, list[str]] = {pid: [] for pid in partnership_ids}
+    for partnership_id, raw_title in rows:
+        titles_by_partnership[partnership_id].append(raw_title)
+    return {pid: _classify_titles(titles) for pid, titles in titles_by_partnership.items()}
+
+
+def partner_category(session, partnership: Partnership) -> str:
+    """Single-partnership convenience wrapper -- see partner_categories_for_partnerships
+    (used by the dancer page, which needs every partnership's category at once)."""
+    return partner_categories_for_partnerships(session, [partnership.id])[partnership.id]
 
 
 def search_competitions(session, term: str, limit: int = 25) -> list[Competition]:
@@ -354,21 +399,36 @@ def _ordinal(n: int) -> str:
     return f"{n}{suffix}"
 
 
-def results_for_comp_event(session, comp_event_id: int) -> pd.DataFrame:
+def _field_results_for_comp_events(session, comp_event_ids: list[int]) -> dict[int, pd.DataFrame]:
+    """Batched core of results_for_comp_event: computes every comp_event's
+    full field ranking (each not-recalled couple's "9th (10 marks)" style
+    standing needs the *whole field* to compute, not just one couple) for
+    many events in one round trip apiece, instead of one round trip apiece
+    PER EVENT. results_for_comp_event (single-event, e.g. the competition
+    page) and result_histories_for_partnerships (needs many events' not-
+    recalled placements at once, to render a dancer's full history) both
+    funnel through this -- real case: rendering one dancer's page called
+    this once per distinct not-recalled event (18 for a heavy case),
+    ~423ms each including its own internal round trips, ~7.6s total
+    against a real network database before this batching."""
+    if not comp_event_ids:
+        return {}
     stmt = (
         select(Result, Entry, Partnership)
         .select_from(Result)
         .join(Entry, Result.entry_id == Entry.id)
         .join(Partnership, Entry.partnership_id == Partnership.id)
-        .where(Result.comp_event_id == comp_event_id)
+        .where(Result.comp_event_id.in_(comp_event_ids))
     )
     rows = session.execute(stmt).all()
 
     person_ids = {pid for _, _, partnership in rows for pid in (partnership.leader_id, partnership.follower_id) if pid is not None}
     names = _person_names(session, person_ids)
-    highest_round_by_key = _highest_round_labels_for_entries(session, [(entry.id, comp_event_id) for _, entry, _ in rows])
+    highest_round_by_key = _highest_round_labels_for_entries(
+        session, [(entry.id, result.comp_event_id) for result, entry, _ in rows]
+    )
 
-    prelim = []
+    prelim_by_event: dict[int, list] = {ce_id: [] for ce_id in comp_event_ids}
     for result, entry, partnership in rows:
         parts = [names[pid] for pid in (partnership.leader_id, partnership.follower_id) if pid in names]
         couple = " & ".join(parts) if parts else "(solo)"
@@ -379,68 +439,85 @@ def results_for_comp_event(session, comp_event_id: int) -> pd.DataFrame:
         else:
             placement = f"{result.placement_low}-{result.placement_high}"
         round_id, round_order, highest_round = highest_round_by_key.get(
-            (entry.id, comp_event_id)
-        ) or _highest_round_fallback(session, comp_event_id, result.placement_low)
-        prelim.append((couple, highest_round, placement, result.field_size, entry.competitor_no, round_id, round_order, entry.id))
+            (entry.id, result.comp_event_id)
+        ) or _highest_round_fallback(session, result.comp_event_id, result.placement_low)
+        prelim_by_event[result.comp_event_id].append(
+            (couple, highest_round, placement, result.field_size, entry.competitor_no, round_id, round_order, entry.id)
+        )
 
     # Batch-fetch how many judges marked each not-recalled couple in the
-    # specific round they were eliminated in, so they can be ranked by how
-    # close they got (see marks_totals_for_entries_in_round) instead of in
-    # arbitrary order within the same round.
-    entry_round_pairs = {(entry_id, round_id) for *_rest, round_id, _ro, entry_id in prelim if round_id is not None}
+    # specific round they were eliminated in, across every event at once,
+    # so they can be ranked by how close they got (see
+    # marks_totals_for_entries_in_round) instead of in arbitrary order
+    # within the same round.
+    entry_round_pairs = {
+        (entry_id, round_id)
+        for prelim in prelim_by_event.values()
+        for *_rest, round_id, _ro, entry_id in prelim
+        if round_id is not None
+    }
     marks_totals = marks_totals_for_entries_in_round(session, entry_round_pairs)
 
-    out = []
-    for couple, highest_round, placement, field_size, competitor_no, round_id, round_order, entry_id in prelim:
-        out.append(
-            {
-                "Couple": couple,
-                "Highest round": highest_round,
-                "Placement": placement,
-                "Field size": field_size,
-                "Start #": competitor_no,
-                "_round_order": round_order,
-                "_marks_total": marks_totals.get((entry_id, round_id), 0) if round_id is not None else 0,
-                "_first_name": (couple.split(" & ")[0].split() or [""])[0],
-                "_entry_id": entry_id,
-            }
-        )
-    df = pd.DataFrame(out)
-    if not df.empty:
-        # Placed couples sort by placement ascending, same as before. Couples
-        # who weren't recalled sort after every placed couple; among
-        # themselves: by how far they got (Semi-Final before Quarter-Final
-        # before Round N before Round N-1, i.e. round_order descending), then
-        # by how many judges marked them in that round (descending -- the
-        # couple closest to advancing ranks first, e.g. "7th" in a
-        # semi-final of 6), then alphabetically by the first (leading)
-        # dancer's first name to break any remaining tie. Per user request.
-        not_recalled = df["Placement"] == "not recalled"
-        df["_group"] = not_recalled.astype(int)
-        df["_placement_sort"] = 0.0
-        df.loc[~not_recalled, "_placement_sort"] = df.loc[~not_recalled, "Placement"].str.split("-").str[0].astype(float)
-        df = df.sort_values(
-            ["_group", "_placement_sort", "_round_order", "_marks_total", "_first_name"],
-            ascending=[True, True, False, False, True],
-        ).reset_index(drop=True)
+    out_by_event: dict[int, pd.DataFrame] = {}
+    for ce_id, prelim in prelim_by_event.items():
+        out = []
+        for couple, highest_round, placement, field_size, competitor_no, round_id, round_order, entry_id in prelim:
+            out.append(
+                {
+                    "Couple": couple,
+                    "Highest round": highest_round,
+                    "Placement": placement,
+                    "Field size": field_size,
+                    "Start #": competitor_no,
+                    "_round_order": round_order,
+                    "_marks_total": marks_totals.get((entry_id, round_id), 0) if round_id is not None else 0,
+                    "_first_name": (couple.split(" & ")[0].split() or [""])[0],
+                    "_entry_id": entry_id,
+                }
+            )
+        df = pd.DataFrame(out)
+        if not df.empty:
+            # Placed couples sort by placement ascending, same as before. Couples
+            # who weren't recalled sort after every placed couple; among
+            # themselves: by how far they got (Semi-Final before Quarter-Final
+            # before Round N before Round N-1, i.e. round_order descending), then
+            # by how many judges marked them in that round (descending -- the
+            # couple closest to advancing ranks first, e.g. "7th" in a
+            # semi-final of 6), then alphabetically by the first (leading)
+            # dancer's first name to break any remaining tie. Per user request.
+            not_recalled = df["Placement"] == "not recalled"
+            df["_group"] = not_recalled.astype(int)
+            df["_placement_sort"] = 0.0
+            df.loc[~not_recalled, "_placement_sort"] = df.loc[~not_recalled, "Placement"].str.split("-").str[0].astype(float)
+            df = df.sort_values(
+                ["_group", "_placement_sort", "_round_order", "_marks_total", "_first_name"],
+                ascending=[True, True, False, False, True],
+            ).reset_index(drop=True)
 
-        # Not-recalled couples show their overall standing (their 1-indexed
-        # position in this same field-wide ranking, continuing on from the
-        # last finalist) plus how many judges marked them in the round they
-        # were eliminated in, e.g. "9th (10 marks)" -- per user request, so
-        # "not recalled" alone doesn't hide how close a couple actually got.
-        not_recalled = df["Placement"] == "not recalled"
-        overall_rank = df.index[not_recalled] + 1
-        marks_total = df.loc[not_recalled, "_marks_total"].astype(int)
-        df.loc[not_recalled, "Placement"] = [
-            f"{_ordinal(rank)} ({marks} mark{'' if marks == 1 else 's'})" for rank, marks in zip(overall_rank, marks_total)
-        ]
+            # Not-recalled couples show their overall standing (their 1-indexed
+            # position in this same field-wide ranking, continuing on from the
+            # last finalist) plus how many judges marked them in the round they
+            # were eliminated in, e.g. "9th (10 marks)" -- per user request, so
+            # "not recalled" alone doesn't hide how close a couple actually got.
+            not_recalled = df["Placement"] == "not recalled"
+            overall_rank = df.index[not_recalled] + 1
+            marks_total = df.loc[not_recalled, "_marks_total"].astype(int)
+            df.loc[not_recalled, "Placement"] = [
+                f"{_ordinal(rank)} ({marks} mark{'' if marks == 1 else 's'})" for rank, marks in zip(overall_rank, marks_total)
+            ]
 
-        # _entry_id is kept (not dropped) so callers can look up which couple a
-        # row is, for the judges' marks drill-down -- hidden from display via
-        # column_order in st.dataframe rather than dropped here.
-        df = df.drop(columns=["_group", "_placement_sort", "_round_order", "_marks_total", "_first_name"])
-    return df
+            # _entry_id is kept (not dropped) so callers can look up which couple a
+            # row is, for the judges' marks drill-down -- hidden from display via
+            # column_order in st.dataframe rather than dropped here.
+            df = df.drop(columns=["_group", "_placement_sort", "_round_order", "_marks_total", "_first_name"])
+        out_by_event[ce_id] = df
+    return out_by_event
+
+
+def results_for_comp_event(session, comp_event_id: int) -> pd.DataFrame:
+    """Single-event convenience wrapper -- see _field_results_for_comp_events
+    (result_histories_for_partnerships needs many events' fields at once)."""
+    return _field_results_for_comp_events(session, [comp_event_id])[comp_event_id]
 
 
 # Standard Latin syllabus order (matches the "CC,S,R,PD,J" abbreviations in
@@ -852,15 +929,25 @@ def dancer_search(session) -> None:
         st.warning("No partnerships/entries on file for this person yet.")
         return
 
-    # Each partnership's results are pulled once, then partnerships are shown
-    # most-recent-result-first -- with dozens of Pro-Am students this keeps
-    # the page navigable instead of one giant mixed table (per user
-    # feedback), and surfaces a dancer's current partners ahead of old ones
-    # they haven't competed with in years. result_history_for_partnership
-    # already orders rows by Competition.start_date descending, so each
-    # df's first row is that partnership's latest result; empty-result
+    # Each partnership's results and category are pulled in one batched
+    # query apiece (result_histories_for_partnerships /
+    # partner_categories_for_partnerships), not one query per partnership
+    # -- a dancer with dozens of partnerships previously issued dozens of
+    # sequential round trips per page load, invisible locally (SQLite has
+    # ~0 round-trip cost) but ~20s against a real network database (Neon,
+    # ~85ms/round-trip) before this batching.
+    partnership_ids = [p.id for p in partnerships]
+    histories_by_id = result_histories_for_partnerships(session, partnership_ids)
+    categories_by_id = partner_categories_for_partnerships(session, partnership_ids)
+
+    # Partnerships are shown most-recent-result-first -- with dozens of
+    # Pro-Am students this keeps the page navigable instead of one giant
+    # mixed table (per user feedback), and surfaces a dancer's current
+    # partners ahead of old ones they haven't competed with in years. Each
+    # df is already ordered by Competition.start_date descending, so its
+    # first row is that partnership's latest result; empty-result
     # partnerships (no Date to sort by) sort last.
-    partnership_dfs = [(p, result_history_for_partnership(session, p.id)) for p in partnerships]
+    partnership_dfs = [(p, histories_by_id[p.id]) for p in partnerships]
     partnership_dfs.sort(key=lambda pair: pair[1]["Date"].iloc[0] if not pair[1].empty else dt.date.min, reverse=True)
 
     total_results = sum(len(df) for _, df in partnership_dfs)
@@ -873,7 +960,7 @@ def dancer_search(session) -> None:
     # separate sections when more than one category is actually present.
     categorized: dict[str, list] = {}
     for partnership, df in partnership_dfs:
-        category = partner_category(session, partnership)
+        category = categories_by_id[partnership.id]
         categorized.setdefault(category, []).append((partnership, df))
 
     category_order = [
