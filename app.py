@@ -278,7 +278,7 @@ def best_results(df: pd.DataFrame, n: int = 5) -> pd.DataFrame:
 def partner_label(session, partnership: Partnership) -> str:
     # No partnership.kind suffix here: that field is a load-time guess
     # ("amateur" for basically everything), not the same signal as
-    # partner_category's per-event-title classification -- showing both
+    # _classify_titles' per-event-title classification -- showing both
     # together read as contradictory (e.g. "[amateur]" on a partnership
     # already grouped under "Instructor-style").
     parts = []
@@ -353,39 +353,28 @@ def _classify_titles(titles: list[str]) -> str:
     return "Competitive partners"
 
 
-@st.cache_data(ttl=600)
-def partner_categories_for_partnerships(_session, db_identity: str, partnership_ids: list[int]) -> dict[int, str]:
-    """Batched version of partner_category: one query for every
-    partnership's titles at once instead of one query per partnership.
-    Locally (SQLite, ~0 round-trip cost) a per-partnership query loop was
-    invisible; against a real network database (Neon) each round trip
-    costs ~85ms, so a dancer with dozens of partnerships spent seconds on
-    this alone -- a real N+1-at-the-partnership-level bug only apparent
-    under real network latency, not local dev (see also
-    result_histories_for_partnerships, same rationale).
+def _split_history_by_category(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Split one partnership's result history by each individual result's
+    own event title, rather than classifying the whole partnership at
+    once. A partnership can genuinely change category over time -- real
+    case: Yegor Zhukov & Izzy Luong's first 3 titles (Mar-Apr 2024) carry
+    the ProAm/MxAm marker, but every one of their next 54 (Oct 2024
+    onward) is AmAm or unmarked-competitive. Classifying the whole
+    partnership from "any title ever" locked it into Instructor-style
+    for life despite 95% of their actual history being a genuine
+    competitive partnership -- so the partnership is shown under BOTH
+    sections instead, each with only the results that belong there.
 
-    Cached (see search_people's docstring for why this is safe) since
-    re-viewing the same dancer is common."""
-    if not partnership_ids:
-        return {}
-    rows = _session.execute(
-        select(Entry.partnership_id, CompEvent.raw_title)
-        .select_from(Result)
-        .join(Entry, Entry.id == Result.entry_id)
-        .join(CompEvent, Result.comp_event_id == CompEvent.id)
-        .where(Entry.partnership_id.in_(partnership_ids))
-        .distinct()
-    ).all()
-    titles_by_partnership: dict[int, list[str]] = {pid: [] for pid in partnership_ids}
-    for partnership_id, raw_title in rows:
-        titles_by_partnership[partnership_id].append(raw_title)
-    return {pid: _classify_titles(titles) for pid, titles in titles_by_partnership.items()}
-
-
-def partner_category(session, partnership: Partnership) -> str:
-    """Single-partnership convenience wrapper -- see partner_categories_for_partnerships
-    (used by the dancer page, which needs every partnership's category at once)."""
-    return partner_categories_for_partnerships(session, _db_identity(session), [partnership.id])[partnership.id]
+    Same marker rules as _classify_titles (each row is classified via a
+    single-element list, which exercises exactly the same logic --
+    "all single-dance titles" degenerates correctly to "is this one
+    title single-dance" for a length-1 list). An empty partnership (no
+    results on file yet) stays under "Other partnerships" with its
+    empty df, same as before this split existed."""
+    if df.empty:
+        return {"Other partnerships": df}
+    categories = df["Event"].map(lambda title: _classify_titles([title]))
+    return dict(tuple(df.groupby(categories, sort=False)))
 
 
 def search_competitions(session, term: str, limit: int = 25) -> list[Competition]:
@@ -964,39 +953,31 @@ def dancer_search(session) -> None:
         st.warning("No partnerships/entries on file for this person yet.")
         return
 
-    # Each partnership's results and category are pulled in one batched
-    # query apiece (result_histories_for_partnerships /
-    # partner_categories_for_partnerships), not one query per partnership
+    # Each partnership's results are pulled in one batched query
+    # (result_histories_for_partnerships), not one query per partnership
     # -- a dancer with dozens of partnerships previously issued dozens of
     # sequential round trips per page load, invisible locally (SQLite has
     # ~0 round-trip cost) but ~20s against a real network database (Neon,
     # ~85ms/round-trip) before this batching.
     partnership_ids = [p.id for p in partnerships]
     histories_by_id = result_histories_for_partnerships(session, db_identity, partnership_ids)
-    categories_by_id = partner_categories_for_partnerships(session, db_identity, partnership_ids)
 
-    # Partnerships are shown most-recent-result-first -- with dozens of
-    # Pro-Am students this keeps the page navigable instead of one giant
-    # mixed table (per user feedback), and surfaces a dancer's current
-    # partners ahead of old ones they haven't competed with in years. Each
-    # df is already ordered by Competition.start_date descending, so its
-    # first row is that partnership's latest result; empty-result
-    # partnerships (no Date to sort by) sort last.
-    partnership_dfs = [(p, histories_by_id[p.id]) for p in partnerships]
-    partnership_dfs.sort(key=lambda pair: pair[1]["Date"].iloc[0] if not pair[1].empty else dt.date.min, reverse=True)
-
-    total_results = sum(len(df) for _, df in partnership_dfs)
+    total_results = sum(len(df) for df in histories_by_id.values())
     st.subheader(f"Partnerships ({len(partnerships)}) -- {total_results} results total")
 
     # Group by category (students vs. amateur-couple partners vs.
     # professional partners) when we have the signal for it -- an
     # instructor with dozens of Pro-Am students otherwise mixes them into
-    # one flat list with their own competitive partnerships. Only shown as
-    # separate sections when more than one category is actually present.
+    # one flat list with their own competitive partnerships. Split per
+    # result rather than per partnership (see _split_history_by_category):
+    # a partnership that changed category over time appears once per
+    # section it actually has results in, each showing only that
+    # section's own results. Only shown as separate sections when more
+    # than one category is actually present.
     categorized: dict[str, list] = {}
-    for partnership, df in partnership_dfs:
-        category = categories_by_id[partnership.id]
-        categorized.setdefault(category, []).append((partnership, df))
+    for partnership in partnerships:
+        for category, sub_df in _split_history_by_category(histories_by_id[partnership.id]).items():
+            categorized.setdefault(category, []).append((partnership, sub_df))
 
     category_order = [
         "Competitive partners",
@@ -1009,6 +990,12 @@ def dancer_search(session) -> None:
         group = categorized.get(category)
         if not group:
             continue
+        # Most-recent-result-first within each section -- each df is
+        # already ordered by Competition.start_date descending (inherited
+        # from the split), so its first row is that entry's latest
+        # result; empty-result partnerships (no Date to sort by) sort
+        # last.
+        group.sort(key=lambda pair: pair[1]["Date"].iloc[0] if not pair[1].empty else dt.date.min, reverse=True)
         if show_headers:
             st.markdown(f"**{category}** ({len(group)})")
         for partnership, df in group:
