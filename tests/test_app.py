@@ -396,6 +396,51 @@ def test_classify_titles_treats_all_single_dance_titles_as_instructor_style():
     )
 
 
+def test_classify_titles_treats_hyphen_and_slash_pro_am_spellings_as_instructor_style():
+    # "Pro Am"/"ProAm" were already handled -- "Pro-Am" and "Pro/Am" are
+    # two more real spelling variants seen in the wild that the plain
+    # marker list was missing entirely.
+    assert _classify_titles(["Pro-Am 6-Dance Int Style Full Silver C Int'l Ballroom (W)"]) == "Instructor-style"
+    assert _classify_titles(["L-M Pro/Am Closed Bronze American Rhythm Championships (C/R/SW)"]) == "Instructor-style"
+
+
+def test_classify_titles_treats_pa_abbreviation_as_instructor_style():
+    # Real case: "PA AA MA 10-Dance International Championship..." is
+    # NDCA's own abbreviated form of the same combined-eligibility titles
+    # ("ProAm, Mixed Am, AmAm ...") already handled spelled out -- "PA" is
+    # matched with a word boundary specifically so it doesn't false-positive
+    # on unrelated words that merely contain "pa" (e.g. "Paso Doble").
+    assert _classify_titles(["PA AA MA 10-Dance International Championship Open Bronze mA2 Int'l Latin (R)"]) == (
+        "Instructor-style"
+    )
+    assert _classify_titles(["Adult AC-B2 Op. Full Bronze Int'l Paso Doble"]) != "Instructor-style"
+
+
+def test_classify_titles_treats_single_role_division_code_as_instructor_style():
+    # Real case that motivated adding this: Arsenii Moroz & Ellen
+    # Sarkisyan's "mL-YH Open Full Gold Int'l Cha Cha" carries no Pro-Am/
+    # AmAm marker and isn't literally "Single Dance", so it fell through to
+    # the default Competitive bucket despite being the same single-dance
+    # Pro-Am progression as their other, explicitly-marked titles. A
+    # single-role division code ("L-"/"G-"/"mL-"/"mG-"/"LG-", naming only
+    # the student's level since the pro has none) is the signal instead.
+    assert _classify_titles(["mL-YH Open Full Gold Int'l Cha Cha"]) == "Instructor-style"
+    assert _classify_titles(["L-A2 Bronze 1 Am. Hustle"]) == "Instructor-style"
+
+
+def test_classify_titles_treats_amateur_couple_division_code_as_competitive():
+    # Real counter-case that a naive "no marker, no parens -> instructor"
+    # rule would have broken: Adyson Cherkas & Yegor Zhukov's (confirmed
+    # genuinely competitive) "Best of the Best AC-JR Int'l Cha Cha" -- an
+    # amateur-couple dance-off round, not a Pro-Am progression. "AC-"
+    # ("Amateur Couple") classifies both partners together as peers, never
+    # co-occurs with a single-role code in the same title (confirmed across
+    # the whole database), and needs no explicit rule here -- it just falls
+    # through to the same default as any other unmarked, non-single-dance,
+    # non-role-coded title.
+    assert _classify_titles(["Best of the Best AC-JR  Int'l Cha Cha"]) == "Competitive partners"
+
+
 def test_split_history_by_category_splits_one_partnership_across_both_sections():
     # Real case: Yegor Zhukov & Izzy Luong's first 3 results (Mar-Apr
     # 2024) carry the ProAm/MxAm marker, but every one of their next 54

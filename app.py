@@ -5,6 +5,7 @@ Run with: streamlit run app.py
 from __future__ import annotations
 
 import datetime as dt
+import re
 
 import pandas as pd
 import streamlit as st
@@ -290,8 +291,29 @@ def partner_label(session, partnership: Partnership) -> str:
     return " & ".join(parts) if parts else "(solo)"
 
 
-_INSTRUCTOR_TITLE_MARKERS = ("pro am", "proam", "mxam", "mixed am")
+_INSTRUCTOR_TITLE_MARKERS = ("pro am", "proam", "mxam", "mixed am", "pro-am", "pro/am")
 _AMATEUR_TITLE_MARKERS = ("am/am", "amam")
+# NDCA's own abbreviation for Pro-Am, e.g. "PA AA MA 10-Dance..." -- the
+# short form of the same combined-eligibility titles ("ProAm, Mixed Am,
+# AmAm ...") the word markers above already catch. Needs a word-boundary
+# regex rather than a plain substring check: "pa" (lowercased) is a
+# substring of unrelated words ("Paso Doble") that a bare `in` check would
+# false-positive on. Validated against ~17,500 real titles with this
+# prefix and zero conflicts across every confirmed-competitive
+# partnership checked.
+_INSTRUCTOR_WORD_MARKER = re.compile(r"\bPA\b")
+# A single-role division code -- "L-"/"G-" (Lady/Gentleman) or their
+# "mixed"/combined variants "mL-"/"mG-"/"LG-" -- names only the *student's*
+# level in a Pro-Am pairing, since the professional partner has no level of
+# their own to classify. Contrasts with "AC-" ("Amateur Couple"), which
+# classifies both partners together as peers -- confirmed across the whole
+# database (400k+ titles) that these two code families never co-occur in
+# the same title. Real case that motivated adding this: Arsenii Moroz &
+# Ellen Sarkisyan's "mL-YH Open Full Gold Int'l Cha Cha" carries no
+# Pro-Am/AmAm marker and isn't literally "Single Dance", so it fell through
+# to the default Competitive bucket despite being the same single-dance
+# Pro-Am progression as their other, explicitly-marked titles.
+_ROLE_DIVISION_CODE = re.compile(r"\b(?:mL|mG|LG|L|G)-[A-Za-z0-9]")
 
 
 def _classify_titles(titles: list[str]) -> str:
@@ -302,24 +324,33 @@ def _classify_titles(titles: list[str]) -> str:
     signal -- a real instructor like Arsenii Moroz never shows 'P').
 
     NDCA event titles carry an explicit eligibility marker naming which
-    categories may enter -- "Pro Am"/"ProAm", "MxAm"/"Mixed Am", or
-    "AM/AM"/"AmAm" -- but a single event/heat is often open to *multiple*
-    categories at once (e.g. "ProAm, Mixed Am, AmAm Youth Single..."), with
-    no per-couple field distinguishing which category any specific couple
-    in that heat actually registered under. So a lone title can't be
-    trusted; instead every title this partnership ever competed under is
-    scanned, and a Pro-Am/Mixed-Am marker anywhere is treated as decisive
-    even if some of those same titles also list AmAm as eligible -- a
-    genuinely peer amateur couple's titles never carry a Pro-Am/Mixed-Am
-    marker at all (verified: zero of professional Umario Diallo's 18
-    partnerships land in the amateur bucket, while Arsenii's 3
-    user-confirmed competitive partners -- Sofia Chubay, Emily Tatoosi,
-    Mishella Vishnevskiy -- and 2 more the rule newly surfaced all do).
+    categories may enter -- "Pro Am"/"ProAm"/"Pro-Am"/"Pro/Am", "MxAm"/
+    "Mixed Am", "AM/AM"/"AmAm", or NDCA's own abbreviated combined-
+    eligibility form ("PA AA MA ...", see _INSTRUCTOR_WORD_MARKER) -- but a
+    single event/heat is often open to *multiple* categories at once (e.g.
+    "ProAm, Mixed Am, AmAm Youth Single..."), with no per-couple field
+    distinguishing which category any specific couple in that heat
+    actually registered under. So a lone title can't be trusted; instead
+    every title this partnership ever competed under is scanned, and a
+    Pro-Am/Mixed-Am marker anywhere is treated as decisive even if some of
+    those same titles also list AmAm as eligible -- a genuinely peer
+    amateur couple's titles never carry a Pro-Am/Mixed-Am marker at all
+    (verified: zero of professional Umario Diallo's 18 partnerships land
+    in the amateur bucket, while Arsenii's 3 user-confirmed competitive
+    partners -- Sofia Chubay, Emily Tatoosi, Mishella Vishnevskiy -- and 2
+    more the rule newly surfaced all do).
 
-    When no title carries any marker at all, two more signals apply, in
+    When no title carries any marker at all, three more signals apply, in
     order:
 
-    1. Every title is an isolated "Single Dance" event (never multi-dance/
+    1. The title carries a single-role division code (see
+    _ROLE_DIVISION_CODE) -- the same single-dance Pro-Am progression as
+    rule 2 below, just missing the literal words "Single Dance" and any
+    eligibility marker. Checked per-title (not "all titles"), since this is
+    a strong enough signal on its own -- one such title in an otherwise
+    marked partnership is still that same partnership's Pro-Am history.
+
+    2. Every title is an isolated "Single Dance" event (never multi-dance/
     scholarship/championship) -- how a coach runs a beginner Pro-Am student
     through their first events one dance at a time (verified: Arsenii
     Moroz's 4 confirmed competitive partners are 0% single-dance each,
@@ -330,13 +361,16 @@ def _classify_titles(titles: list[str]) -> str:
     single-dance-heavy despite him being a confirmed professional, so those
     fall through to the next rule instead.
 
-    2. Otherwise (a real multi-dance/scholarship/championship title exists
+    3. Otherwise (a real multi-dance/scholarship/championship title exists
     but never carries a Pro-Am/Mixed-Am marker) -- per user direction, an
     unmarked multi-dance format is assumed competitive rather than left
     ambiguous, since NDCA doesn't always bother spelling out "AM/AM" on
     events that are amateur-only by construction (real case: Sofia Chubay &
     Daniel Saba's "Amateur PreChampionship 4-Dance"/"Amateur Open 4/5-Dance"
     titles never say "AM/AM" but are clearly not Pro-Am/Mixed-Am either).
+    A joint "AC-" ("Amateur Couple") division code needs no explicit rule
+    of its own here -- it just falls through to this same default, and
+    never collides with rule 1's role codes (see _ROLE_DIVISION_CODE).
 
     "Other partnerships" is now reachable only when a partnership has no
     event titles on record at all.
@@ -346,8 +380,12 @@ def _classify_titles(titles: list[str]) -> str:
     lowered = [t.lower() for t in titles]
     if any(marker in t for t in lowered for marker in _INSTRUCTOR_TITLE_MARKERS):
         return "Instructor-style"
+    if any(_INSTRUCTOR_WORD_MARKER.search(t) for t in titles):
+        return "Instructor-style"
     if any(marker in t for t in lowered for marker in _AMATEUR_TITLE_MARKERS):
         return "Competitive partners"
+    if any(_ROLE_DIVISION_CODE.search(t) for t in titles):
+        return "Instructor-style"
     if all("single dance" in t for t in lowered):
         return "Instructor-style"
     return "Competitive partners"
