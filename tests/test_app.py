@@ -416,6 +416,16 @@ def test_classify_titles_treats_pa_abbreviation_as_instructor_style():
     assert _classify_titles(["Adult AC-B2 Op. Full Bronze Int'l Paso Doble"]) != "Instructor-style"
 
 
+def test_classify_titles_treats_ma_abbreviation_as_instructor_style():
+    # Real case: a partnership's own titles include both the abbreviated
+    # "AC-MLP1 MA-Full Bronze Int. Cha Cha" and the spelled-out "AC-MLP1
+    # Mixed Amateur 3-dance International Latin (C/S/R)" for what's
+    # clearly the same division -- "MA" is NDCA's abbreviation for "Mixed
+    # Am", matched with a word boundary for the same reason as "PA".
+    assert _classify_titles(["AC-MLP1 MA-Full Bronze Int. Cha Cha"]) == "Instructor-style"
+    assert _classify_titles(["AC-A1 MA - Bronze 2 International Rumba"]) == "Instructor-style"
+
+
 def test_classify_titles_treats_single_role_division_code_as_instructor_style():
     # Real case that motivated adding this: Arsenii Moroz & Ellen
     # Sarkisyan's "mL-YH Open Full Gold Int'l Cha Cha" carries no Pro-Am/
@@ -473,3 +483,47 @@ def test_split_history_by_category_keeps_empty_partnership_under_other():
     split = _split_history_by_category(df)
     assert set(split.keys()) == {"Other partnerships"}
     assert split["Other partnerships"].empty
+
+
+def test_split_history_by_category_promotes_same_day_amam_title_to_instructor_style():
+    # Real case: Arsenii Moroz & Eliana Rose Ben Dov's "Youth Bronze
+    # 3-Dance Open J1 AM/AM Int'l Latin (CC,S,R)" carries only the AM/AM
+    # marker on its own, but landed on the same date (The Royal Ball,
+    # 2023-03-18) as 5 Pro-Am "Youth Single Dance ... Int'l <dance>"
+    # titles covering those exact same 3 dances plus 2 more -- a combined
+    # placement derived from dances already scored individually as
+    # Pro-Am. NDCA's own title for the combined round doesn't repeat the
+    # eligibility wording, so the per-title rule alone can't catch it;
+    # the same-day sibling promotes it instead.
+    same_day = dt.date(2023, 3, 18)
+    df = pd.DataFrame(
+        [
+            {"Date": same_day, "Event": "Youth Single Dance AC-mLJ2 Open Bronze Int'l Cha Cha"},
+            {"Date": same_day, "Event": "Youth Single Dance AC-mLJ2 Open Bronze Int'l Samba"},
+            {"Date": same_day, "Event": "Youth Single Dance AC-mLJ2 Open Bronze Int'l Rumba"},
+            {"Date": same_day, "Event": "Youth Single Dance AC-mLJ2 Open Bronze Int'l Paso Doble"},
+            {"Date": same_day, "Event": "Youth Single Dance AC-mLJ2 Open Bronze Int'l Jive"},
+            {"Date": same_day, "Event": "Youth Bronze 3-Dance Open J1 AM/AM Int'l Latin (CC,S,R)"},
+        ]
+    )
+    split = _split_history_by_category(df)
+    assert set(split.keys()) == {"Instructor-style"}
+    assert len(split["Instructor-style"]) == 6
+
+
+def test_split_history_by_category_does_not_promote_amam_title_on_a_different_day():
+    # The promotion in the test above is deliberately scoped to the SAME
+    # competition date -- an AM/AM title on a day with no Instructor-style
+    # sibling for this partnership must stay Competitive, otherwise a
+    # genuine across-competition category change (Yegor Zhukov & Izzy
+    # Luong, see the split test above) could get masked by unrelated
+    # Instructor-style history from a different date.
+    df = pd.DataFrame(
+        [
+            {"Date": dt.date(2024, 3, 28), "Event": "ProAm Open 5-Dance JR MxAm Int'l Ballroom (W,T,VW,F,Q)"},
+            {"Date": dt.date(2024, 10, 17), "Event": "AmAm U21 Open Dance Challenge AM/AM U21 Int'l Ballroom (W,T,VW,F,Q)"},
+        ]
+    )
+    split = _split_history_by_category(df)
+    assert set(split.keys()) == {"Instructor-style", "Competitive partners"}
+    assert len(split["Competitive partners"]) == 1

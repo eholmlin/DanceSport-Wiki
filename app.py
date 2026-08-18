@@ -293,15 +293,18 @@ def partner_label(session, partnership: Partnership) -> str:
 
 _INSTRUCTOR_TITLE_MARKERS = ("pro am", "proam", "mxam", "mixed am", "pro-am", "pro/am")
 _AMATEUR_TITLE_MARKERS = ("am/am", "amam")
-# NDCA's own abbreviation for Pro-Am, e.g. "PA AA MA 10-Dance..." -- the
-# short form of the same combined-eligibility titles ("ProAm, Mixed Am,
-# AmAm ...") the word markers above already catch. Needs a word-boundary
-# regex rather than a plain substring check: "pa" (lowercased) is a
-# substring of unrelated words ("Paso Doble") that a bare `in` check would
-# false-positive on. Validated against ~17,500 real titles with this
-# prefix and zero conflicts across every confirmed-competitive
-# partnership checked.
-_INSTRUCTOR_WORD_MARKER = re.compile(r"\bPA\b")
+# NDCA's own abbreviations for Pro-Am and Mixed-Am, e.g. "PA AA MA
+# 10-Dance..." or "AC-MLP1 MA-Full Bronze Int. Cha Cha" -- the short form
+# of the same combined-eligibility titles ("ProAm, Mixed Am, AmAm ...")
+# the word markers above already catch (confirmed directly: one real
+# partnership's titles include both "AC-MLP1 MA-Full Bronze..." and
+# "AC-MLP1 Mixed Amateur 3-dance..." for what's clearly the same
+# division). Needs a word-boundary regex rather than a plain substring
+# check: "pa"/"ma" lowercased are substrings of unrelated words ("Paso
+# Doble") that a bare `in` check would false-positive on. Validated
+# against ~17,500 (PA) and ~36,700 (MA) real titles with zero conflicts
+# across every confirmed-competitive partnership checked.
+_INSTRUCTOR_WORD_MARKER = re.compile(r"\b(?:PA|MA)\b")
 # A single-role division code -- "L-"/"G-" (Lady/Gentleman) or their
 # "mixed"/combined variants "mL-"/"mG-"/"LG-" -- names only the *student's*
 # level in a Pro-Am pairing, since the professional partner has no level of
@@ -391,6 +394,11 @@ def _classify_titles(titles: list[str]) -> str:
     return "Competitive partners"
 
 
+def _has_amateur_marker(title: str) -> bool:
+    tl = title.lower()
+    return any(marker in tl for marker in _AMATEUR_TITLE_MARKERS)
+
+
 def _split_history_by_category(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     """Split one partnership's result history by each individual result's
     own event title, rather than classifying the whole partnership at
@@ -408,10 +416,34 @@ def _split_history_by_category(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     "all single-dance titles" degenerates correctly to "is this one
     title single-dance" for a length-1 list). An empty partnership (no
     results on file yet) stays under "Other partnerships" with its
-    empty df, same as before this split existed."""
+    empty df, same as before this split existed.
+
+    One more pass after the per-title classification: an AM/AM-marked
+    title that shares a competition date with an Instructor-style
+    sibling for this same partnership gets promoted to Instructor-style
+    too. Real case: Arsenii Moroz & Eliana Rose Ben Dov's "Youth Bronze
+    3-Dance Open J1 AM/AM Int'l Latin (CC,S,R)" landed on the same date
+    (2023-03-18, The Royal Ball) as 5 Pro-Am "Youth Single Dance ...
+    Int'l <dance>" titles covering those exact same 3 dances (Cha Cha,
+    Samba, Rumba) plus 2 more -- a combined placement derived from
+    dances already scored individually as Pro-Am, where NDCA's own title
+    for the combined round just doesn't repeat the eligibility wording
+    the individual dances carry. Deliberately scoped to the SAME
+    competition date (not "ever," like the marker checks in
+    _classify_titles) so it can't mask a partnership that genuinely
+    changed category between different competitions, e.g. Yegor & Izzy
+    above -- a same-day mixture is NDCA's own labeling inconsistency for
+    one round, not evidence of a real category change."""
     if df.empty:
         return {"Other partnerships": df}
     categories = df["Event"].map(lambda title: _classify_titles([title]))
+    instructor_dates = set(df.loc[categories == "Instructor-style", "Date"])
+    override = (
+        (categories == "Competitive partners")
+        & df["Event"].map(_has_amateur_marker)
+        & df["Date"].isin(instructor_dates)
+    )
+    categories = categories.mask(override, "Instructor-style")
     return dict(tuple(df.groupby(categories, sort=False)))
 
 
