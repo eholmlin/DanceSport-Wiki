@@ -28,15 +28,21 @@ header line and a bare `>` terminator line:
    StagingResult with no accompanying StagingMark rows.
 
 3. `=Heat N: <event title>` (no "Combined Event" prefix) -- a *self-
-   contained* multi-dance final: one sub-table per dance followed by a
-   "Final summary" sub-table, all inside a single block (used when the
-   field was small enough to skip recall rounds entirely). Not handled by
-   v1 -- logged and skipped, same resilience pattern as
-   dsr.parse.ndca's "one malformed event must not lose its siblings".
+   contained* multi-dance final: one marks sub-table per dance (header
+   either "Dance <name>" or a bare dance name, both seen in the wild) and
+   an optional "Rule N" tie-break countback sub-table, followed by a
+   "Final summary" sub-table giving the overall placement -- used when
+   the field was small enough to skip recall rounds entirely. See
+   _parse_multi_dance_final_block. Originally left unhandled in v1 (no
+   known case needed it); added after a real one did -- Arsenii Moroz &
+   Mikaela Holmlin's Holiday Dance Classic 2025 "Mixed Amateur 3-dance
+   International Latin" result lived entirely inside one of these blocks,
+   so skipping the shape silently dropped their result from the app.
 
 `Solo N: ...` blocks (individual showcase routines, scored by average
-rather than placement/recall) are a fourth, distinct shape -- also
-skipped in v1.
+rather than placement/recall) are a fourth, distinct shape -- still
+skipped, logged and counted the same resilience-pattern way as
+dsr.parse.ndca's "one malformed event must not lose its siblings".
 """
 from __future__ import annotations
 
@@ -479,6 +485,141 @@ def _parse_combined_event_block(block: list[str]) -> CompMngrEventData | None:
     return CompMngrEventData(raw_title=raw_title, ranking=ranking, marks=[])
 
 
+_RULE_SECTION = re.compile(r"^Rule \d+$")
+
+
+def _parse_multi_dance_final_block(block: list[str], directory: dict[str, StagingPersonRef]) -> CompMngrEventData | None:
+    """Parse one `=Heat N: <title>` block: a self-contained multi-dance
+    final (used when the field was small enough to skip recall rounds
+    entirely) with one marks sub-table per dance, an optional "Rule N"
+    tie-break countback sub-table, and a "Final summary" sub-table giving
+    the overall placement. Real case that motivated adding this (v1 left
+    it unhandled -- see module docstring): Arsenii Moroz & Mikaela Holmlin
+    at Holiday Dance Classic 2025 danced a 3-dance Mixed Amateur Latin
+    entirely inside one of these blocks, so leaving the shape unparsed
+    silently dropped a couple's entire result.
+
+    Per-dance sub-headers appear in two forms in the wild -- "Dance
+    Hustle" and bare "Cha Cha" -- both handled the same way. The "Rule N"
+    sub-table (tie-break countback detail) is skipped: the Final
+    summary's own placement already reflects any countback resolution
+    (e.g. "2(R11)"), so nothing is lost by not modeling the rule itself.
+
+    This same "=Heat"/"=Pro heat" prefix is also used, confusingly, for a
+    completely different shape: a genuine multi-dance *recall* round
+    (per-judge "R"/blank marks, no skated placement at all), titled with
+    a " - Quarter-final"/" - Semi-final" suffix same as a regular heat
+    block -- confirmed on real Wisconsin State 2023 data, where every one
+    of 6 such round-suffixed blocks has no Final summary section at all.
+    Bailing out whenever the title carries a recall-round suffix (rather
+    than relying on the Final summary check alone) makes that exclusion
+    an explicit guarantee instead of an incidental one; recall-round
+    multi-dance blocks are left unhandled here, same as before.
+
+    Returns None (skipped by the caller) for a block missing a Final
+    summary section -- an unexpected shape, not silently guessed at."""
+    header_line = block[1]
+    if not header_line.startswith("=Heat ") and not header_line.startswith("=Pro heat "):
+        return None
+    title_part = header_line.split(":", 1)[1].strip()
+    raw_title, round_type = _strip_round_suffix(title_part)
+    if round_type != "final":
+        return None  # multi-dance recall round in disguise -- see docstring
+
+    id_match = _BLOCK_ID_LIST.match(block[0])
+    candidate_ids = id_match.group(1).split(",") if id_match else []
+
+    # Every non-table line starts a new named sub-section; table rows
+    # (which always start with "|") belong to whichever section precedes
+    # them.
+    sections: list[tuple[str, list[str]]] = []
+    name: str | None = None
+    lines: list[str] = []
+    for line in block[2:-1]:  # drop the "<id,..." header and trailing ">" terminator, already consumed
+        if line.startswith("|"):
+            lines.append(line)
+        elif line.strip():
+            if name is not None:
+                sections.append((name, lines))
+            name, lines = line.strip(), []
+    if name is not None:
+        sections.append((name, lines))
+
+    marks: list[StagingMark] = []
+    final_lines: list[str] | None = None
+    for name, lines in sections:
+        if name == "Final summary":
+            final_lines = lines
+            continue
+        if _RULE_SECTION.match(name) or not any(line.startswith("|") for line in lines):
+            continue  # tie-break countback detail, or an empty/unrecognized section -- nothing to extract
+        dance_name = name[len("Dance ") :].strip() if name.startswith("Dance ") else name
+        header, rows = _parse_table_rows(lines)
+        judge_numbers: list[str] = []
+        for cell in header[1:]:
+            if re.fullmatch(r"\d{2}", cell):
+                judge_numbers.append(cell)
+            else:
+                break
+        for row in rows:
+            entry_match = _ENTRY_ROW.match(row[0].strip())
+            if not entry_match:
+                continue
+            bib = entry_match.group(1)
+            for judge_no, cell in zip(judge_numbers, row[1 : 1 + len(judge_numbers)]):
+                cell = cell.strip()
+                mark_placement = int(float(cell)) if cell and cell.replace(".", "", 1).isdigit() else None
+                marks.append(
+                    StagingMark(
+                        round_label="final",
+                        competitor_no=bib,
+                        judge_letter=judge_no,
+                        dance=dance_name,
+                        recalled=None,
+                        placement=mark_placement,
+                    )
+                )
+
+    if final_lines is None:
+        return None
+
+    header, rows = _parse_table_rows(final_lines)
+    entries: list[StagingEntry] = []
+    results: list[StagingResult] = []
+    field_size = len(rows)
+
+    for row in rows:
+        entry_match = _ENTRY_ROW.match(row[0].strip())
+        if not entry_match:
+            continue
+        bib, names_part = entry_match.group(1), entry_match.group(2)
+        # Same defensive filter as _parse_heat_block -- a blank second
+        # name is a real source omission, not a name to keep.
+        abbrev_names = [n.strip() for n in names_part.split("/", 1) if n.strip()]
+        claimed: set[str] = set()
+        name_parts = _resolve_couple_names(abbrev_names, candidate_ids, directory, claimed)
+        partner_1 = StagingPersonRef(name=name_parts[0])
+        partner_2 = StagingPersonRef(name=name_parts[1]) if len(name_parts) > 1 else None
+        entries.append(StagingEntry(competitor_no=bib, country=None, partner_1=partner_1, partner_2=partner_2))
+
+        # The Result column is a placement optionally suffixed with the
+        # countback rule that resolved a tie, e.g. "2(R11)" -- only the
+        # leading integer is the placement.
+        placement_match = re.match(r"\d+", row[-1].strip())
+        placement = int(placement_match.group()) if placement_match else None
+        if placement is not None:
+            results.append(
+                StagingResult(
+                    competitor_no=bib, placement_low=placement, placement_high=placement,
+                    made_final=True, field_size=field_size,
+                )
+            )
+
+    staging_round = StagingRound(round_type="final", round_order=_ROUND_RANK["final"], entries_in=field_size, recalled_count=None)
+    ranking = RankingPage(is_solo=False, rounds=[staging_round], entries=entries, results=results)
+    return CompMngrEventData(raw_title=raw_title, ranking=ranking, marks=marks)
+
+
 def parse_scoresheets_dat(
     dat_bytes: bytes, directory: dict[str, StagingPersonRef] | None = None
 ) -> tuple[list[CompMngrEventData], int]:
@@ -497,9 +638,11 @@ def parse_scoresheets_dat(
     StagingPersonRefs (still usable, just lower entity-resolution quality).
 
     Returns (events, skipped_count) -- skipped_count covers block shapes
-    v1 doesn't parse yet (multi-dance-in-one-block finals, solos), logged
-    by the caller rather than raised, matching dsr.parse.ndca's "one
-    malformed event must not lose every other event" resilience pattern.
+    still unhandled (solos) plus any malformed block of a shape that is
+    otherwise handled (e.g. a multi-dance final missing its Final summary
+    section), logged by the caller rather than raised, matching
+    dsr.parse.ndca's "one malformed event must not lose every other
+    event" resilience pattern.
     """
     text = _decode(dat_bytes)
     blocks = _split_blocks(text)
@@ -509,7 +652,11 @@ def parse_scoresheets_dat(
         if len(block) < 2:
             skipped += 1
             continue
-        parsed = _parse_heat_block(block, directory or {}) or _parse_combined_event_block(block)
+        parsed = (
+            _parse_heat_block(block, directory or {})
+            or _parse_combined_event_block(block)
+            or _parse_multi_dance_final_block(block, directory or {})
+        )
         if parsed is None:
             skipped += 1
             continue

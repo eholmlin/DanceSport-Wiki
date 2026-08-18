@@ -221,11 +221,80 @@ def test_parse_scoresheets_dat_omitted_partner_name_becomes_solo_not_blank_perso
     assert entry.partner_2 is None
 
 
+def test_parse_scoresheets_dat_multi_dance_final_block_produces_result_and_marks():
+    # Real case that motivated adding this shape: Arsenii Moroz & Mikaela
+    # Holmlin's "Mixed Amateur 3-dance International Latin" result at
+    # Holiday Dance Classic 2025 lived entirely inside one of these
+    # self-contained "=Heat N: <title>" blocks (Cha Cha/Samba/Rumba
+    # sub-tables + a "Final summary" overall-placement table) -- a shape
+    # v1 originally skipped entirely, silently dropping their result.
+    events, _skipped = parse_scoresheets_dat(load("holiday2025_multidance_blocks.dat"))
+    event = next(e for e in events if e.raw_title == "AC-MLY Mixed Amateur 3-dance International Latin (C/S/R)")
+    assert event.ranking.rounds[0].round_type == "final"
+    assert event.ranking.rounds[0].entries_in == 3
+
+    assert event.ranking.results == [
+        StagingResult(competitor_no="519", placement_low=3, placement_high=3, made_final=True, field_size=3),
+        StagingResult(competitor_no="562", placement_low=1, placement_high=1, made_final=True, field_size=3),
+        StagingResult(competitor_no="792", placement_low=2, placement_high=2, made_final=True, field_size=3),
+    ]
+    entry = next(e for e in event.ranking.entries if e.competitor_no == "562")
+    assert entry.partner_1.name == "Moroz"
+    assert entry.partner_2.name == "Holmlin"
+
+    # 3 dances (bare "Cha Cha"/"Samba"/"Rumba" sub-headers, no "Dance "
+    # prefix) x 3 couples x 7 judges (03,22,23,25,28,35,41).
+    assert len(event.marks) == 3 * 3 * 7
+    assert {m.dance for m in event.marks} == {"Cha Cha", "Samba", "Rumba"}
+    marks_562 = [m for m in event.marks if m.competitor_no == "562"]
+    assert len(marks_562) == 3 * 7
+    assert all(m.recalled is None for m in marks_562)  # skated placements, not a recall round
+
+
+def test_parse_scoresheets_dat_multi_dance_final_block_strips_countback_suffix_and_skips_rule_section():
+    # Real case: a tie resolved via countback shows as "2(R11)" in the
+    # Final summary's Result column -- only the leading integer is the
+    # placement. The "Rule 11" sub-table (tie-break detail) itself
+    # contributes no marks or results -- the Final summary already
+    # reflects the resolved placement.
+    events, _skipped = parse_scoresheets_dat(load("holiday2025_multidance_blocks.dat"))
+    event = next(e for e in events if e.raw_title == "L-B Night Club 2-dance (Hustle/West Coast Swing)")
+    assert event.ranking.results == [
+        StagingResult(competitor_no="175", placement_low=1, placement_high=1, made_final=True, field_size=3),
+        StagingResult(competitor_no="207", placement_low=2, placement_high=2, made_final=True, field_size=3),
+        StagingResult(competitor_no="311", placement_low=3, placement_high=3, made_final=True, field_size=3),
+    ]
+    # "Dance Hustle"/"Dance West Coast Swing" sub-headers this time (the
+    # other form seen in the wild) x 3 couples x 5 judges (11,28,30,33,34)
+    # -- Rule 11's own 2 rows (bib-only, no partner names) never became
+    # entries or marks.
+    assert len(event.marks) == 2 * 3 * 5
+    assert {m.dance for m in event.marks} == {"Hustle", "West Coast Swing"}
+
+
+def test_parse_scoresheets_dat_multi_dance_recall_round_stays_unhandled():
+    # Real case: the same "=Heat"/"=Pro heat" block prefix is also used
+    # for a genuine multi-dance *recall* round (per-judge "R" marks, no
+    # skated placement), titled with a " - Quarter-final"/" - Semi-final"
+    # suffix same as a regular heat block -- confirmed on real Wisconsin
+    # State 2023 data, which has all three rounds of this exact division
+    # (Quarter-final, Semi-final, and the true multi-dance final). Only
+    # the clean-titled final (no round suffix) should come through --
+    # the two round-suffixed recall blocks must stay unhandled (not
+    # misread their "R" marks as skated placements) rather than being
+    # silently guessed at.
+    events, skipped = parse_scoresheets_dat(load("wisconsin2023_scoresheetsbyperson.dat"))
+    assert skipped > 0
+    matches = [e for e in events if e.raw_title == "L-C Pro/Am Closed Silver Smooth Scholarship (W/T/FT)"]
+    assert len(matches) == 1
+    assert matches[0].ranking.rounds[0].round_type == "final"
+
+
 def test_parse_scoresheets_dat_skips_unhandled_shapes_without_failing():
-    # Wisconsin's export includes "=Heat N: ..." multi-dance-in-one-block
-    # finals and "Solo N: ..." individual routines -- v1 doesn't parse
-    # either shape, but one unsupported block must not lose the whole
-    # file's worth of regular heats, same resilience pattern as
+    # Wisconsin's export includes 23 "Solo N: ..." individual-routine
+    # blocks -- still unparsed (no known case has needed them yet) -- but
+    # one unsupported block must not lose the whole file's worth of
+    # regular heats and multi-dance finals, same resilience pattern as
     # dsr.parse.ndca's per-event try/except.
     events, skipped = parse_scoresheets_dat(load("wisconsin2023_scoresheetsbyperson.dat"))
     assert len(events) > 3000
