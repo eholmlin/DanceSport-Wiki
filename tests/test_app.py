@@ -16,6 +16,7 @@ from app import (
     best_results,
     marks_detail_for_entry,
     marks_detail_with_totals,
+    result_history_for_partnership,
     results_for_comp_event,
     skating_system_results_for_final,
 )
@@ -295,6 +296,57 @@ def test_not_recalled_couples_show_overall_rank_and_marks_count(tmp_path):
     assert rows.loc["Eve & Frank", "Placement"] == "3rd (1 mark)"
 
 
+def test_results_for_comp_event_leader_follower_links_point_to_the_right_person(tmp_path):
+    # The inverse of the dancer page's "View" link: each row in a
+    # competition's results table carries "Leader"/"Follower" columns
+    # linking back to that exact person's dancer page (see main()'s
+    # linked_person_id). A solo entry has no follower at all -- that cell
+    # must be None (no link), not a link to a nonexistent person.
+    engine = init_db(tmp_path / "partner_links.sqlite3")
+    session = get_session(engine)
+
+    competition = Competition(source="ndca_premier", source_code="1", name="Test Comp")
+    session.add(competition)
+    session.flush()
+
+    event = CompEvent(competition_id=competition.id, raw_title="Test Event")
+    session.add(event)
+    session.flush()
+
+    leader = Person(display_name="Alice")
+    follower = Person(display_name="Bob")
+    session.add_all([leader, follower])
+    session.flush()
+    partnership = Partnership(leader_id=leader.id, follower_id=follower.id, kind="amateur")
+    session.add(partnership)
+    session.flush()
+    entry = Entry(competition_id=competition.id, partnership_id=partnership.id, competitor_no="1")
+    session.add(entry)
+    session.flush()
+    session.add(Result(comp_event_id=event.id, entry_id=entry.id, placement_low=1, placement_high=1, field_size=2))
+
+    soloist = Person(display_name="Cara")
+    session.add(soloist)
+    session.flush()
+    solo_partnership = Partnership(leader_id=soloist.id, follower_id=None, kind="solo")
+    session.add(solo_partnership)
+    session.flush()
+    solo_entry = Entry(competition_id=competition.id, partnership_id=solo_partnership.id, competitor_no="2")
+    session.add(solo_entry)
+    session.flush()
+    session.add(Result(comp_event_id=event.id, entry_id=solo_entry.id, placement_low=2, placement_high=2, field_size=2))
+
+    session.commit()
+
+    df = results_for_comp_event(session, event.id)
+    rows = df.set_index("Couple")
+
+    assert rows.loc["Alice & Bob", "Leader"] == f"?person_id={leader.id}"
+    assert rows.loc["Alice & Bob", "Follower"] == f"?person_id={follower.id}"
+    assert rows.loc["Cara", "Leader"] == f"?person_id={soloist.id}"
+    assert rows.loc["Cara", "Follower"] is None
+
+
 def test_best_results_excludes_not_recalled_rank_and_marks_format():
     # Real crash: result_history_for_partnership started showing not-recalled
     # rows as "9th (10 marks)" instead of the literal string "not recalled",
@@ -527,3 +579,40 @@ def test_split_history_by_category_does_not_promote_amam_title_on_a_different_da
     split = _split_history_by_category(df)
     assert set(split.keys()) == {"Instructor-style", "Competitive partners"}
     assert len(split["Competitive partners"]) == 1
+
+
+def test_result_history_view_column_links_to_the_exact_competition_and_event(tmp_path):
+    # Each row's "View" column carries a relative URL encoding this exact
+    # result's competition and event -- read back by main() via
+    # st.query_params to jump straight into Competition search on that
+    # event instead of making the user re-search for it (see
+    # competition_search's linked_competition_id/linked_event_id).
+    engine = init_db(tmp_path / "view_link.sqlite3")
+    session = get_session(engine)
+
+    competition = Competition(source="ndca_premier", source_code="1", name="Test Comp")
+    session.add(competition)
+    session.flush()
+
+    leader = Person(display_name="Leader")
+    follower = Person(display_name="Follower")
+    session.add_all([leader, follower])
+    session.flush()
+
+    partnership = Partnership(leader_id=leader.id, follower_id=follower.id, kind="amateur")
+    session.add(partnership)
+    session.flush()
+
+    entry = Entry(competition_id=competition.id, partnership_id=partnership.id, competitor_no="1")
+    session.add(entry)
+    session.flush()
+
+    event = CompEvent(competition_id=competition.id, raw_title="Test Event")
+    session.add(event)
+    session.flush()
+
+    session.add(Result(comp_event_id=event.id, entry_id=entry.id, placement_low=1, placement_high=1, field_size=1))
+    session.commit()
+
+    df = result_history_for_partnership(session, partnership.id)
+    assert df["View"].iloc[0] == f"?competition_id={competition.id}&event_id={event.id}"

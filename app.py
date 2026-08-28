@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+from typing import NamedTuple, Optional
 
 import pandas as pd
 import streamlit as st
@@ -177,6 +178,24 @@ def marks_totals_for_entries_in_round(session, entry_round_ids: set[tuple[int, i
     return totals
 
 
+# Shared by every st.dataframe call that renders a result_histories_for_
+# partnerships-shaped df (the full history table and its "Best results"
+# subset) -- both carry a "View" column of relative "?competition_id=...
+# &event_id=..." URLs (see result_histories_for_partnerships), rendered as
+# a clickable link instead of a raw query string.
+_VIEW_LINK_COLUMN_CONFIG = {"View": st.column_config.LinkColumn("View", display_text="Open ->")}
+
+# The inverse direction: the Competition page's per-event results table
+# (see _field_results_for_comp_events) carries "Leader"/"Follower" columns
+# of relative "?person_id=..." URLs -- one dancer's own name is already
+# shown in "Couple", so the link text stays generic rather than repeating
+# it.
+_PARTNER_LINK_COLUMN_CONFIG = {
+    "Leader": st.column_config.LinkColumn("Leader", display_text="View ->"),
+    "Follower": st.column_config.LinkColumn("Follower", display_text="View ->"),
+}
+
+
 @st.cache_data(ttl=600)
 def result_histories_for_partnerships(_session, db_identity: str, partnership_ids: list[int]) -> dict[int, pd.DataFrame]:
     """Batched version of result_history_for_partnership: one query for
@@ -247,6 +266,13 @@ def result_histories_for_partnerships(_session, db_identity: str, partnership_id
                 "Placement": placement,
                 "Field size": result.field_size,
                 "Start #": entry.competitor_no,
+                # Relative URL (query params only) rather than an absolute
+                # one -- resolves against whatever host the app is served
+                # from (localhost in dev, the Streamlit Cloud domain in
+                # prod) without hardcoding either. Read back by main() via
+                # st.query_params to jump straight into Competition search
+                # on this exact event, bypassing the name-search step.
+                "View": f"?competition_id={competition.id}&event_id={comp_event.id}",
             }
         )
     return {pid: pd.DataFrame(rows) for pid, rows in rows_by_partnership.items()}
@@ -492,6 +518,27 @@ def _ordinal(n: int) -> str:
     return f"{n}{suffix}"
 
 
+class _PrelimRow(NamedTuple):
+    """One couple's not-yet-finalized standing in one comp_event, on the
+    way to becoming a row of _field_results_for_comp_events' output df.
+    A named tuple rather than a bare one -- a bare positional tuple here
+    already caused a real bug once: entry_round_pairs below unpacked its
+    last 3 fields via `*_rest, round_id, _ro, entry_id`, which silently
+    grabbed the wrong fields the moment leader_id/follower_id were
+    appended after entry_id."""
+
+    couple: str
+    highest_round: str
+    placement: str
+    field_size: int
+    competitor_no: str
+    round_id: Optional[int]
+    round_order: int
+    entry_id: int
+    leader_id: Optional[int]
+    follower_id: Optional[int]
+
+
 def _field_results_for_comp_events(session, comp_event_ids: list[int]) -> dict[int, pd.DataFrame]:
     """Batched core of results_for_comp_event: computes every comp_event's
     full field ranking (each not-recalled couple's "9th (10 marks)" style
@@ -535,7 +582,18 @@ def _field_results_for_comp_events(session, comp_event_ids: list[int]) -> dict[i
             (entry.id, result.comp_event_id)
         ) or _highest_round_fallback(session, result.comp_event_id, result.placement_low)
         prelim_by_event[result.comp_event_id].append(
-            (couple, highest_round, placement, result.field_size, entry.competitor_no, round_id, round_order, entry.id)
+            _PrelimRow(
+                couple=couple,
+                highest_round=highest_round,
+                placement=placement,
+                field_size=result.field_size,
+                competitor_no=entry.competitor_no,
+                round_id=round_id,
+                round_order=round_order,
+                entry_id=entry.id,
+                leader_id=partnership.leader_id,
+                follower_id=partnership.follower_id,
+            )
         )
 
     # Batch-fetch how many judges marked each not-recalled couple in the
@@ -544,28 +602,33 @@ def _field_results_for_comp_events(session, comp_event_ids: list[int]) -> dict[i
     # marks_totals_for_entries_in_round) instead of in arbitrary order
     # within the same round.
     entry_round_pairs = {
-        (entry_id, round_id)
-        for prelim in prelim_by_event.values()
-        for *_rest, round_id, _ro, entry_id in prelim
-        if round_id is not None
+        (row.entry_id, row.round_id) for prelim in prelim_by_event.values() for row in prelim if row.round_id is not None
     }
     marks_totals = marks_totals_for_entries_in_round(session, entry_round_pairs)
 
     out_by_event: dict[int, pd.DataFrame] = {}
     for ce_id, prelim in prelim_by_event.items():
         out = []
-        for couple, highest_round, placement, field_size, competitor_no, round_id, round_order, entry_id in prelim:
+        for row in prelim:
             out.append(
                 {
-                    "Couple": couple,
-                    "Highest round": highest_round,
-                    "Placement": placement,
-                    "Field size": field_size,
-                    "Start #": competitor_no,
-                    "_round_order": round_order,
-                    "_marks_total": marks_totals.get((entry_id, round_id), 0) if round_id is not None else 0,
-                    "_first_name": (couple.split(" & ")[0].split() or [""])[0],
-                    "_entry_id": entry_id,
+                    "Couple": row.couple,
+                    "Highest round": row.highest_round,
+                    "Placement": row.placement,
+                    "Field size": row.field_size,
+                    "Start #": row.competitor_no,
+                    # Relative URLs, same convention as result_histories_for_
+                    # partnerships' "View" column -- read back by main() via
+                    # st.query_params to jump straight to that person's
+                    # dancer page. None (not "") for a solo entry's missing
+                    # follower, so the cell renders empty rather than a
+                    # link to nowhere.
+                    "Leader": f"?person_id={row.leader_id}" if row.leader_id is not None else None,
+                    "Follower": f"?person_id={row.follower_id}" if row.follower_id is not None else None,
+                    "_round_order": row.round_order,
+                    "_marks_total": marks_totals.get((row.entry_id, row.round_id), 0) if row.round_id is not None else 0,
+                    "_first_name": (row.couple.split(" & ")[0].split() or [""])[0],
+                    "_entry_id": row.entry_id,
                 }
             )
         df = pd.DataFrame(out)
@@ -893,23 +956,37 @@ def marks_judge_totals(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(out).reset_index(drop=True)
 
 
-def competition_search(session) -> None:
+def competition_search(session, *, linked_competition_id: int | None = None, linked_event_id: int | None = None) -> None:
+    """linked_competition_id/linked_event_id come from the "View" link
+    column on the dancer page (see main()) -- when set and the search box
+    is still empty (a fresh arrival via that link, not a manual search),
+    they skip straight to that competition/event instead of requiring the
+    name search below. A non-empty term always takes over from a stale
+    link still sitting in the URL, dropping linked_event_id too (it likely
+    belongs to a different competition than whatever the new search
+    finds)."""
     term = st.text_input("Search for a competition by name", "", key="competition_search_term")
     if not term:
-        st.info("Type a competition name above (e.g. 'Emerald Ball', 'U.S. National').")
-        return
-
-    competitions = search_competitions(session, term)
-    if not competitions:
-        st.warning(f"No competitions found matching {term!r}.")
-        return
-
-    if len(competitions) == 1:
-        competition = competitions[0]
+        if linked_competition_id is None:
+            st.info("Type a competition name above (e.g. 'Emerald Ball', 'U.S. National').")
+            return
+        competition = session.get(Competition, linked_competition_id)
+        if competition is None:
+            st.warning(f"No competition found with id={linked_competition_id}.")
+            return
     else:
-        options = {f"{c.name} ({c.start_date}) -- id {c.id}": c for c in competitions}
-        choice = st.selectbox("Multiple matches -- pick one:", list(options.keys()))
-        competition = options[choice]
+        linked_event_id = None
+        competitions = search_competitions(session, term)
+        if not competitions:
+            st.warning(f"No competitions found matching {term!r}.")
+            return
+
+        if len(competitions) == 1:
+            competition = competitions[0]
+        else:
+            options = {f"{c.name} ({c.start_date}) -- id {c.id}": c for c in competitions}
+            choice = st.selectbox("Multiple matches -- pick one:", list(options.keys()))
+            competition = options[choice]
 
     st.header(competition.name)
     cols = st.columns(4)
@@ -949,7 +1026,14 @@ def competition_search(session) -> None:
         return
 
     event_options = {f"{e.raw_title} -- {counts.get(e.id, 0)} entries": e for e in filtered}
-    event_choice = st.selectbox("Select an event to view results", list(event_options.keys()))
+    option_labels = list(event_options.keys())
+    default_index = 0
+    if linked_event_id is not None:
+        for i, e in enumerate(event_options.values()):
+            if e.id == linked_event_id:
+                default_index = i
+                break
+    event_choice = st.selectbox("Select an event to view results", option_labels, index=default_index)
     event = event_options[event_choice]
 
     df = results_for_comp_event(session, event.id)
@@ -957,7 +1041,13 @@ def competition_search(session) -> None:
         st.write("No results on file for this event.")
     else:
         display_cols = [c for c in df.columns if not c.startswith("_")]
-        st.dataframe(df, use_container_width=True, hide_index=True, column_order=display_cols)
+        st.dataframe(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            column_order=display_cols,
+            column_config=_PARTNER_LINK_COLUMN_CONFIG,
+        )
 
         st.subheader("Judges' marks")
         couple_options = dict(zip(df["Couple"], df["_entry_id"]))
@@ -988,17 +1078,29 @@ def competition_search(session) -> None:
                 st.dataframe(detail_df, use_container_width=True, hide_index=True, column_order=detail_cols)
 
 
-def dancer_search(session) -> None:
+def dancer_search(session, *, linked_person_id: int | None = None) -> None:
+    """linked_person_id comes from a "Leader"/"Follower" link column on the
+    Competition page (see main() and _field_results_for_comp_events) --
+    when set and the search box is still empty (a fresh arrival via that
+    link, not a manual search), it skips straight to that person instead
+    of requiring a name search. Same "manual search always wins" rule as
+    competition_search's linked_competition_id/linked_event_id."""
     db_identity = _db_identity(session)
     term = st.text_input("Search for a dancer by name", "", key="dancer_search_term")
     if not term:
-        st.info("Type a name above to search (matches display name and any known alias spelling).")
-        return
-
-    people = search_people(session, db_identity, term)
-    if not people:
-        st.warning(f"No one found matching {term!r}.")
-        return
+        if linked_person_id is None:
+            st.info("Type a name above to search (matches display name and any known alias spelling).")
+            return
+        person = session.get(Person, linked_person_id)
+        if person is None:
+            st.warning(f"No dancer found with id={linked_person_id}.")
+            return
+        people = [person]
+    else:
+        people = search_people(session, db_identity, term)
+        if not people:
+            st.warning(f"No one found matching {term!r}.")
+            return
 
     if len(people) == 1:
         person = people[0]
@@ -1075,23 +1177,40 @@ def dancer_search(session) -> None:
                     st.write("No results on file for this partnership.")
                     continue
 
-                st.dataframe(df, use_container_width=True, hide_index=True)
+                st.dataframe(df, use_container_width=True, hide_index=True, column_config=_VIEW_LINK_COLUMN_CONFIG)
 
                 best = best_results(df)
                 if not best.empty:
                     st.write("**Best results**")
-                    st.dataframe(best, use_container_width=True, hide_index=True)
+                    st.dataframe(
+                        best, use_container_width=True, hide_index=True, column_config=_VIEW_LINK_COLUMN_CONFIG
+                    )
 
 
 def main() -> None:
     session = _session()
     st.title("DanceSport Wiki")
 
-    mode = st.radio("Search by", ["Dancer", "Competition"], horizontal=True)
+    # A "View"/"Leader"/"Follower" link clicked on either page (opens a
+    # new tab, so this is a fresh session -- see result_histories_for_
+    # partnerships and _field_results_for_comp_events) lands here with
+    # one of these two pairs set; used to jump straight to that exact
+    # event or dancer instead of making the user re-search for it.
+    linked_competition_id = st.query_params.get("competition_id")
+    linked_event_id = st.query_params.get("event_id")
+    linked_person_id = st.query_params.get("person_id")
+
+    mode_options = ["Dancer", "Competition"]
+    default_mode_index = mode_options.index("Competition") if linked_competition_id else 0
+    mode = st.radio("Search by", mode_options, horizontal=True, index=default_mode_index)
     if mode == "Dancer":
-        dancer_search(session)
+        dancer_search(session, linked_person_id=int(linked_person_id) if linked_person_id else None)
     else:
-        competition_search(session)
+        competition_search(
+            session,
+            linked_competition_id=int(linked_competition_id) if linked_competition_id else None,
+            linked_event_id=int(linked_event_id) if linked_event_id else None,
+        )
 
 
 if __name__ == "__main__":
