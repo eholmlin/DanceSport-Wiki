@@ -25,6 +25,8 @@ solo results queryable through the same partnership/entry/result path.
 """
 from __future__ import annotations
 
+import re
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -39,12 +41,61 @@ from dsr.parse.staging import (
 )
 from dsr.resolve.entities import resolve_partnership, resolve_person
 
+# Explicit style-category words -- present on multi-dance/combined titles
+# ("Amer. Rhythm Championship", "Int'l Ballroom (W,T,VW,F,Q)"). "Ballroom"
+# is NDCA's own name for International Standard; every other value here
+# already matches the "Standard"/"Latin"/"Smooth"/"Rhythm" strings used
+# directly by other sources (WDSF), so it's the only word that needs
+# translating rather than just recognizing.
 _STYLE_KEYWORDS = {
+    "Ballroom": "Standard",
     "Latin": "Latin",
     "Standard": "Standard",
     "Smooth": "Smooth",
     "Rhythm": "Rhythm",
 }
+
+# Real case that motivated extending guess_style beyond _STYLE_KEYWORDS:
+# 89% of NDCA/Comp Manager comp_events had style=None, because the vast
+# majority of titles name a single dance directly ("L-C1 Open Bronze Amer.
+# Waltz") with no style-category word at all -- the category only appears
+# on multi-dance/combined titles. Mapping the individual dance name closes
+# most of that gap. A "dual-style" dance (danced in both syllabuses under
+# the same name, e.g. Waltz is Int'l Standard *and* Amer. Smooth) needs an
+# explicit "Int'l"/"American" marker elsewhere in the title to know which;
+# without one, the title is genuinely ambiguous and stays unclassified
+# rather than guessed at, matching this function's own "best-effort"
+# contract. A "single-style" dance (e.g. Paso Doble, only ever Int'l Latin)
+# doesn't need that disambiguation at all.
+#
+# Deliberately excludes Country Western, Nightclub, West Coast Swing,
+# Salsa, Bachata, Hustle, Merengue, Peabody, and Argentine Tango: real
+# dances that either aren't part of NDCA's 4 recognized styles at all, or
+# (Waltz/Two Step/Cha Cha/Rumba under a "C/W"/"Nightclub" banner) reuse a
+# dual-style dance's name for a genuinely different style -- see
+# _EXCLUDED_STYLE_TITLE.
+_SINGLE_STYLE_DANCES = {
+    "quickstep": "Standard",
+    "paso doble": "Latin",
+    "jive": "Latin",
+    "bolero": "Rhythm",
+    "mambo": "Rhythm",
+    "samba": "Latin",
+}
+_DUAL_STYLE_DANCES = {
+    "viennese": ("Standard", "Smooth"),  # (Int'l style, Amer. style)
+    "foxtrot": ("Standard", "Smooth"),
+    "tango": ("Standard", "Smooth"),
+    "waltz": ("Standard", "Smooth"),
+    "cha cha": ("Latin", "Rhythm"),
+    "rumba": ("Latin", "Rhythm"),
+    "swing": (None, "Rhythm"),  # no Int'l equivalent -- East Coast Swing is Amer. Rhythm only
+}
+_EXCLUDED_STYLE_TITLE = re.compile(r"c/w|country western|nightclub|\bnc\b|west coast swing", re.IGNORECASE)
+# "Int." (with a period) is ambiguous with "Intermediate" (a skill level,
+# e.g. "Int Silver") in the wild -- only the unambiguous spellings count.
+_INTL_MARKER = re.compile(r"int'l|international", re.IGNORECASE)
+_AMER_MARKER = re.compile(r"american|amer\.", re.IGNORECASE)
 
 
 def guess_style(raw_title: str) -> str | None:
@@ -52,6 +103,24 @@ def guess_style(raw_title: str) -> str | None:
     for keyword, style in _STYLE_KEYWORDS.items():
         if keyword in raw_title:
             return style
+
+    lowered = raw_title.lower()
+    if _EXCLUDED_STYLE_TITLE.search(lowered):
+        return None
+    if "argentine" in lowered and "tango" in lowered:
+        return None
+    for dance, style in _SINGLE_STYLE_DANCES.items():
+        if dance in lowered:
+            return style
+    is_intl = bool(_INTL_MARKER.search(lowered))
+    is_amer = bool(_AMER_MARKER.search(lowered))
+    for dance, (intl_style, amer_style) in _DUAL_STYLE_DANCES.items():
+        if dance in lowered:
+            if is_intl and intl_style:
+                return intl_style
+            if is_amer and amer_style:
+                return amer_style
+            return None  # dual-style dance named with no disambiguating marker
     return None
 
 
