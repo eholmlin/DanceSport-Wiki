@@ -1,0 +1,224 @@
+{
+    "Status": 1,
+    "Result": {
+        "ID": 2643,
+        "NDCA_Number": "162219",
+        "Type": "Attendee",
+        "Name": [
+            "Matvii",
+            "Artiushenko"
+        ],
+        "Keywords": "Artiushenko, Matvii",
+        "NDCA_Problems": null,
+        "Entries": [
+            {
+                "Type": "Partner",
+                "Couple_ID": 652,
+                "Participants": [
+                    {
+                        "ID": 4216,
+                        "NDCA_Number": "182169",
+                        "Name": [
+                            "Renata",
+                            "Levachova"
+                        ]
+                    }
+                ],
+                "Events": [
+                    {
+                        "Event_ID": 2793,
+                        "Event_Name": "Single Dance mL-P1 CL Full Silver Int'l Cha Cha",
+                        "Heat": "1212",
+                        "Ballroom": null,
+                        "Floor": "B",
+                        "Bib": "697",
+                        "Rounds": [
+                            {
+                                "Round_Name": "Final",
+                                "Session": "09",
+                                "Round_Time": "9\/6\/2026 2:55:06 PM",
+                                "Complete": 0
+                            }
+                        ]
+                    },
+                    {
+                        "Event_ID": 2794,
+                        "Event_Name": "Single Dance mL-P1 CL Full Silver Int'l Samba",
+                        "Heat": "1213",
+                        "Ballroom": null,
+                        "Floor": "B",
+                        "Bib": "697",
+                        "Rounds": [
+                            {
+                                "Round_Name": "Final",
+                                "Session": "09",
+                                "Round_Time": "9\/6\/2026 2:56:33 PM",
+                                "Complete": 0
+                            }
+                        ]
+                    },
+                    {
+                        "Event_ID": 2795,
+                        "Event_Name": "Single Dance mL-P1 CL Full Silver Int'l Rumba",
+                        "Heat": "1214",
+                        "Ballroom": null,
+                        "Floor": "B",
+                        "Bib": "697",
+                        "Rounds": [
+                            {
+                                "Round_Name": "Final",
+                                "Session": "09",
+                                "Round_Time": "9\/6\/2026 2:58:00 PM",
+                                "Complete": 0
+                            }
+                        ]
+                    },
+                    {
+                        "Event_ID": 2796,
+                        "Event_Name": "Single Dance mL-P1 CL Full Silver Int'l Jive",
+                        "Heat": "1216",
+                        "Ballroom": null,
+                        "Floor": "B",
+                        "Bib": "697",
+                        "Rounds": [
+                            {
+                                "Round_Name": "Final",
+                                "Session": "09",
+                                "Round_Time": "9\/6\/2026 3:00:54 PM",
+                                "Complete": 0
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "Type": "Partner",
+                "Couple_ID": 651,
+                "Participants": [
+                    {
+                        "ID": 4215,
+                        "NDCA_Number": "164587",
+                        "Name": [
+                            "Caitlin",
+                            "Merle"
+                        ]
+                    }
+                ],
+                "Events": [
+                    {
+                        "Event_ID": 2789,
+                        "Event_Name": "Single Dance mL-J1 CL Full Silver Int'l Cha Cha",
+                        "Heat": "1222",
+                        "Ballroom": null,
+                        "Floor": "A",
+                        "Bib": "697",
+                        "Rounds": [
+                            {
+                                "Round_Name": "Final",
+                                "Session": "09",
+                                "Round_Time": "9\/6\/2026 3:09:36 PM",
+                                "Complete": 0
+                            }
+                        ]
+                    },
+                    {
+                        "Event_ID": 2790,
+                        "Event_Name": "Single Dance mL-J1 CL Full Silver Int'l Samba",
+                        "Heat": "1223",
+                        "Ballroom": null,
+                        "Floor": "A",
+                        "Bib": "697",
+                        "Rounds": [
+                            {
+                                "Round_Name": "Final",
+                                "Session": "09",
+                                "Round_Time": "9\/6\/2026 3:11:03 PM",
+                                "Complete": 0
+                            }
+                        ]
+                    },
+                    {
+                        "Event_ID": 2791,
+                        "Event_Name": "Single Dance mL-J1 CL Full Silver Int'l Rumba",
+                        "Heat": "1224",
+                        "Ballroom": null,
+                        "Floor": "A",
+                        "Bib": "697",
+                        "Rounds": [
+                            {
+                                "Round_Name": "Final",
+                                "Session": "09",
+                                "Round_Time": "9\/6\/2026 3:12:30 PM",
+                                "Complete": 0
+                            }
+                        ]
+                    },
+                    {
+                        "Event_ID": 2792,
+                        "Event_Name": "Single Dance mL-J1 CL Full Silver Int'l Jive",
+                        "Heat": "1226",
+                        "Ballroom": null,
+                        "Floor": "A",
+                        "Bib": "697",
+                        "Rounds": [
+                            {
+                                "Round_Name": "Final",
+                                "Session": "09",
+                                "Round_Time": "9\/6\/2026 3:15:24 PM",
+                                "Complete": 0
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "Type": "Partner",
+                "Couple_ID": 960,
+                "Participants": [
+                    {
+                        "ID": 1082,
+                        "NDCA_Number": "14598",
+                        "Name": [
+                            "Mishella",
+                            "Vishnevskiy"
+                        ]
+                    }
+                ],
+                "Events": [
+                    {
+                        "Event_ID": 1731,
+                        "Event_Name": "JR & Y Fordney 5-Dance Scholarship AM\/AM YH Int'l Latin (CC,S,R,PD,J)",
+                        "Heat": "1250",
+                        "Ballroom": null,
+                        "Floor": "A",
+                        "Bib": "697",
+                        "Rounds": [
+                            {
+                                "Round_Name": "Quarter-Final",
+                                "Session": "10",
+                                "Round_Time": "9\/6\/2026 7:45:00 PM",
+                                "Complete": 0
+                            }
+                        ]
+                    },
+                    {
+                        "Event_ID": 1713,
+                        "Event_Name": "Amateur Open U21 Int'l Latin Championship (CC,S,R,PD,J)",
+                        "Heat": "1259",
+                        "Ballroom": null,
+                        "Floor": "A",
+                        "Bib": "697",
+                        "Rounds": [
+                            {
+                                "Round_Name": "Quarter-Final",
+                                "Session": "10",
+                                "Round_Time": "9\/6\/2026 10:17:00 PM",
+                                "Complete": 0
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+}

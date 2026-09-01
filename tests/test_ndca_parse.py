@@ -8,6 +8,7 @@ from dsr.parse.ndca import (
     parse_competition,
     parse_competitor_feed,
     parse_event_feed,
+    parse_heatlist_attendee,
     parse_roster,
     parse_season_listing,
 )
@@ -206,3 +207,34 @@ def test_malformed_competitor_skipped_without_losing_sibling_events():
     assert len(latin_u21.ranking.entries) == 28  # field_size is 30; some malformed bibs never resolve in any round
     fordney = next(e for e in events if e.source_code == "594")
     assert len(fordney.ranking.entries) == 27  # unaffected: no malformed rows in this event
+
+
+def test_parse_heatlist_attendee_covers_every_partnership_and_round():
+    # Real fixture: Matvii Artiushenko has 3 different partners at this
+    # competition (10 total scheduled dances across all 3) -- attendee-
+    # centric, unlike results: the queried attendee (top-level Name) is
+    # partner_1 in every row, and each "Entries" item names only the
+    # *other* partner (see parse_heatlist_attendee's own docstring for why
+    # this order can't be assumed stable against an existing Partnership).
+    heats = parse_heatlist_attendee(load("heatlist_attendee_matvii.json"))
+    assert len(heats) == 10
+    assert all(h.partner_1.name == "Matvii Artiushenko" for h in heats)
+    assert {h.partner_2.name for h in heats} == {"Renata Levachova", "Caitlin Merle", "Mishella Vishnevskiy"}
+
+
+def test_parse_heatlist_attendee_extracts_schedule_fields():
+    heats = parse_heatlist_attendee(load("heatlist_attendee_matvii.json"))
+    cha_cha = next(h for h in heats if h.event_name == "Single Dance mL-P1 CL Full Silver Int'l Cha Cha")
+    assert cha_cha.source_event_id == "2793"
+    assert cha_cha.round_name == "Final"
+    assert cha_cha.heat_number == "1212"
+    assert cha_cha.session == "09"
+    assert cha_cha.floor == "B"
+    assert cha_cha.competitor_no == "697"
+    assert cha_cha.scheduled_time == dt.datetime(2026, 9, 6, 14, 55, 6)
+    assert cha_cha.is_complete is False
+
+
+def test_parse_heatlist_attendee_rejects_garbage():
+    with pytest.raises(ParseError):
+        parse_heatlist_attendee(b'{"Status": 0}')

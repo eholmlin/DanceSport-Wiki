@@ -13,7 +13,7 @@ import streamlit as st
 from sqlalchemy import func, or_, select
 
 from dsr.db import get_engine, get_session
-from dsr.models import CompEvent, Competition, Entry, Mark, Partnership, Person, PersonAlias, Result, Round
+from dsr.models import CompEvent, Competition, Entry, Mark, Partnership, Person, PersonAlias, Result, Round, ScheduledHeat
 
 st.set_page_config(page_title="DanceSport Wiki", layout="wide")
 
@@ -501,6 +501,62 @@ def event_result_counts(session, competition_id: int) -> dict[int, int]:
         .group_by(Result.comp_event_id)
     ).all()
     return dict(rows)
+
+
+def competitions_with_heatlists(session, term: str | None = None, limit: int = 25) -> list[Competition]:
+    """Competitions that have at least one scheduled_heat row -- NDCA
+    Premier only for now (see dsr.models.ScheduledHeat), and only ever a
+    handful at a time in practice (heat lists are meaningful only for
+    upcoming/in-progress competitions), so an empty term lists everything
+    on file rather than requiring a name search first, unlike
+    search_competitions. Soonest-first ordering, opposite of
+    search_competitions' most-recent-first -- an upcoming competition is
+    the one someone's about to check a schedule for."""
+    stmt = select(Competition).join(ScheduledHeat, ScheduledHeat.competition_id == Competition.id).distinct()
+    if term:
+        stmt = stmt.where(Competition.name.ilike(f"%{term}%"))
+    stmt = stmt.order_by(Competition.start_date).limit(limit)
+    return list(session.scalars(stmt).all())
+
+
+@st.cache_data(ttl=600)
+def heat_list_for_competition(_session, db_identity: str, competition_id: int) -> pd.DataFrame:
+    """Every scheduled_heat row for one competition, partner names and
+    View links joined in via one batched query -- same _person_names/
+    "?person_id=..." link convention as _field_results_for_comp_events,
+    so the same _PARTNER_LINK_COLUMN_CONFIG renders both. Cached (see
+    search_people's docstring for why this is safe) since a competition's
+    heat list can run into the thousands of rows and gets reloaded
+    every time a filter widget below changes."""
+    rows = _session.execute(
+        select(ScheduledHeat, Partnership)
+        .join(Partnership, ScheduledHeat.partnership_id == Partnership.id)
+        .where(ScheduledHeat.competition_id == competition_id)
+    ).all()
+    person_ids = {pid for _, p in rows for pid in (p.leader_id, p.follower_id) if pid is not None}
+    names = _person_names(_session, person_ids)
+
+    out = []
+    for heat, partnership in rows:
+        parts = [names[pid] for pid in (partnership.leader_id, partnership.follower_id) if pid in names]
+        out.append(
+            {
+                "Time": heat.scheduled_time,
+                "Couple": " & ".join(parts) if parts else "(solo)",
+                "Event": heat.event_name,
+                "Round": heat.round_name,
+                "Heat #": heat.heat_number,
+                "Floor": heat.floor,
+                "Start #": heat.competitor_no,
+                "Danced": "Yes" if heat.is_complete else "No",
+                "Leader": f"?person_id={partnership.leader_id}" if partnership.leader_id is not None else None,
+                "Follower": f"?person_id={partnership.follower_id}" if partnership.follower_id is not None else None,
+            }
+        )
+    df = pd.DataFrame(out)
+    if not df.empty:
+        df = df.sort_values("Time", na_position="last").reset_index(drop=True)
+    return df
 
 
 def _person_names(session, person_ids: set[int]) -> dict[int, str]:
@@ -1078,6 +1134,66 @@ def competition_search(session, *, linked_competition_id: int | None = None, lin
                 st.dataframe(detail_df, use_container_width=True, hide_index=True, column_order=detail_cols)
 
 
+def heat_list_search(session) -> None:
+    """Pre-competition schedules -- NDCA Premier only for now (see
+    dsr.models.ScheduledHeat), loaded via scripts/bulk_load_ndca_heatlists.py.
+    Deliberately doesn't require a search term first, unlike competition_search:
+    there are only ever a handful of competitions with a published heat list
+    on file at any given time, so listing them directly is more useful than
+    making the user guess a name to search."""
+    db_identity = _db_identity(session)
+    st.caption("Pre-competition schedules for upcoming/in-progress NDCA Premier competitions.")
+    term = st.text_input("Filter by competition name (optional)", "", key="heatlist_competition_term")
+    competitions = competitions_with_heatlists(session, term or None)
+    if not competitions:
+        if term:
+            st.warning(f"No competitions with a published heat list found matching {term!r}.")
+        else:
+            st.info("No competitions with a published heat list on file right now.")
+        return
+
+    if len(competitions) == 1:
+        competition = competitions[0]
+    else:
+        options = {f"{c.name} ({c.start_date})  -- id {c.id}": c for c in competitions}
+        choice = st.selectbox("Multiple matches -- pick one:", list(options.keys()))
+        competition = options[choice]
+
+    st.header(competition.name)
+    cols = st.columns(3)
+    date_range = str(competition.start_date)
+    if competition.end_date and competition.end_date != competition.start_date:
+        date_range += f" - {competition.end_date}"
+    cols[0].metric("Dates", date_range)
+    cols[1].metric("Location", ", ".join(p for p in (competition.city, competition.country) if p) or "unknown")
+    cols[2].metric("Sanctioning body", competition.sanctioning_body or "unknown")
+
+    df = heat_list_for_competition(session, db_identity, competition.id)
+    if df.empty:
+        st.write("No scheduled heats on file for this competition.")
+        return
+
+    filter_cols = st.columns(2)
+    name_filter = filter_cols[0].text_input("Filter by dancer name", "")
+    floors = sorted(f for f in df["Floor"].dropna().unique().tolist())
+    floor_choice = filter_cols[1].selectbox("Filter by floor", ["All"] + floors)
+    hide_danced = st.checkbox("Hide heats already danced", value=True)
+
+    filtered = df
+    if name_filter:
+        filtered = filtered[filtered["Couple"].str.contains(name_filter, case=False, na=False)]
+    if floor_choice != "All":
+        filtered = filtered[filtered["Floor"] == floor_choice]
+    if hide_danced:
+        filtered = filtered[filtered["Danced"] == "No"]
+
+    st.subheader(f"{len(filtered)} of {len(df)} scheduled heats")
+    if filtered.empty:
+        st.write("No scheduled heats match this filter.")
+        return
+    st.dataframe(filtered, use_container_width=True, hide_index=True, column_config=_PARTNER_LINK_COLUMN_CONFIG)
+
+
 def dancer_search(session, *, linked_person_id: int | None = None) -> None:
     """linked_person_id comes from a "Leader"/"Follower" link column on the
     Competition page (see main() and _field_results_for_comp_events) --
@@ -1200,17 +1316,19 @@ def main() -> None:
     linked_event_id = st.query_params.get("event_id")
     linked_person_id = st.query_params.get("person_id")
 
-    mode_options = ["Dancer", "Competition"]
+    mode_options = ["Dancer", "Competition", "Heat Lists"]
     default_mode_index = mode_options.index("Competition") if linked_competition_id else 0
     mode = st.radio("Search by", mode_options, horizontal=True, index=default_mode_index)
     if mode == "Dancer":
         dancer_search(session, linked_person_id=int(linked_person_id) if linked_person_id else None)
-    else:
+    elif mode == "Competition":
         competition_search(
             session,
             linked_competition_id=int(linked_competition_id) if linked_competition_id else None,
             linked_event_id=int(linked_event_id) if linked_event_id else None,
         )
+    else:
+        heat_list_search(session)
 
 
 if __name__ == "__main__":

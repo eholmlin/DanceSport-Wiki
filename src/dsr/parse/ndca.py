@@ -30,6 +30,7 @@ from dsr.parse.staging import (
     StagingPersonRef,
     StagingResult,
     StagingRound,
+    StagingScheduledHeat,
 )
 
 SOURCE = "ndca_premier"
@@ -304,7 +305,11 @@ def parse_event_feed(event_json: bytes) -> NdcaEventData:
 
 
 def parse_roster(roster_json: bytes) -> list[tuple[str, str]]:
-    """Parse a /feed/results/?cyi=<id> roster response into (competitor_id, name) pairs."""
+    """Parse a /feed/results/?cyi=<id> roster response into (competitor_id, name) pairs.
+
+    Also used for the heat-list flat attendee roster (/feed/heatlists/?cyi=<id>)
+    -- same {ID, Name} shape, just with an extra "Type": "Attendee" field this
+    function already ignores."""
     payload = json.loads(roster_json)
     if payload.get("Status") != 1:
         raise ParseError(f"roster feed returned Status={payload.get('Status')!r}")
@@ -314,4 +319,74 @@ def parse_roster(roster_json: bytes) -> list[tuple[str, str]]:
         out.append((r["ID"], name))
     if not out:
         raise ParseError("roster feed produced zero competitors")
+    return out
+
+
+def _parse_round_time(s: str | None) -> dt.datetime | None:
+    """NDCA's heat-list Round_Time values look like '9/6/2026 2:55:06 PM'."""
+    return dt.datetime.strptime(s, "%m/%d/%Y %I:%M:%S %p") if s else None
+
+
+def parse_heatlist_attendee(heatlist_json: bytes) -> list[StagingScheduledHeat]:
+    """Parse a /feed/heatlists/?cyi=<id>&id=<attendee> response into one
+    StagingScheduledHeat per (partnership, event, round) the attendee is
+    scheduled for.
+
+    Attendee-centric, unlike the results feed: the queried attendee is the
+    top-level Name, and each "Entries" item is one of *their* partnerships
+    (an attendee with several Pro-Am students has several Entries, each
+    its own Couple_ID), naming only the *other* partner in Participants --
+    confirmed on a real fixture (Matvii Artiushenko, 3 different partners
+    at one competition). So unlike results, where every competitor's own
+    fetch shows a stable, fixed Participants order for a given couple
+    (see module docstring), which of the two ends up partner_1 here
+    depends on which attendee happened to be queried -- callers that also
+    load results must not assume this matches an existing Partnership's
+    leader/follower order (see load/heatlist.py).
+
+    An Entries item whose Type isn't "Partner", or whose Participants has
+    more than one person (a formation/group entry, not a couple), is
+    skipped -- logged, not fatal, same resilience pattern as
+    parse_competitor_feed."""
+    payload = json.loads(heatlist_json)
+    if payload.get("Status") != 1:
+        raise ParseError(f"heatlist feed returned Status={payload.get('Status')!r}")
+    result = payload.get("Result") or {}
+    attendee_name = _require(result, "Name", "heatlist attendee")
+    partner_1 = StagingPersonRef(name=" ".join(p for p in attendee_name if p))
+
+    out: list[StagingScheduledHeat] = []
+    for entry in result.get("Entries") or []:
+        if entry.get("Type") != "Partner":
+            logger.warning("skipping heatlist entry with unsupported Type=%r", entry.get("Type"))
+            continue
+        participants = entry.get("Participants") or []
+        if len(participants) > 1:
+            logger.warning("skipping heatlist entry with %d participants (not a couple)", len(participants))
+            continue
+        partner_2 = _person_ref(participants[0]) if participants else None
+
+        for event in entry.get("Events") or []:
+            event_id = str(_require(event, "Event_ID", "heatlist event"))
+            event_name = _require(event, "Event_Name", "heatlist event")
+            for round_dict in event.get("Rounds") or []:
+                round_name = round_dict.get("Round_Name")
+                if not round_name:
+                    logger.warning("skipping heatlist round with no Round_Name: event=%r", event_name)
+                    continue
+                out.append(
+                    StagingScheduledHeat(
+                        source_event_id=event_id,
+                        event_name=event_name,
+                        round_name=round_name,
+                        heat_number=event.get("Heat"),
+                        session=round_dict.get("Session"),
+                        floor=event.get("Floor"),
+                        competitor_no=event.get("Bib"),
+                        scheduled_time=_parse_round_time(round_dict.get("Round_Time")),
+                        is_complete=bool(round_dict.get("Complete")),
+                        partner_1=partner_1,
+                        partner_2=partner_2,
+                    )
+                )
     return out

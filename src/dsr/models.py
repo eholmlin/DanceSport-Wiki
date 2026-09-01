@@ -249,6 +249,41 @@ class Rating(Base):
     sigma: Mapped[Optional[float]] = mapped_column(Numeric)
 
 
+# ---------- heat lists (pre-competition schedules) ----------
+
+
+class ScheduledHeat(Base):
+    """A couple's scheduled slot in an upcoming/in-progress competition's
+    heat list -- published before results exist, sometimes days ahead of
+    the event. Deliberately kept separate from CompEvent/Round/Result
+    (which model already-completed results): heat lists come from a
+    different NDCA Premier endpoint with a different shape entirely (heat
+    number, floor, session, a scheduled clock time, a "Complete" flag --
+    no marks, no placement), and a schedule can shift (a round's time
+    moved) or vanish (a round got cancelled/merged) between refreshes in
+    a way a completed result never does. Natural key (source,
+    source_event_id, round_name, partnership_id) makes reloading the same
+    competition's heat list idempotent."""
+
+    __tablename__ = "scheduled_heat"
+    __table_args__ = (UniqueConstraint("source", "source_event_id", "round_name", "partnership_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    competition_id: Mapped[int] = mapped_column(ForeignKey("competition.id"), index=True)
+    partnership_id: Mapped[int] = mapped_column(ForeignKey("partnership.id"), index=True)
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    source_event_id: Mapped[str] = mapped_column(String, nullable=False)
+    event_name: Mapped[str] = mapped_column(String, nullable=False)
+    round_name: Mapped[str] = mapped_column(String, nullable=False)
+    heat_number: Mapped[Optional[str]]
+    session: Mapped[Optional[str]]
+    floor: Mapped[Optional[str]]
+    competitor_no: Mapped[Optional[str]]
+    scheduled_time: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=False))
+    is_complete: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class ResolutionQueue(Base):
     __tablename__ = "resolution_queue"
 

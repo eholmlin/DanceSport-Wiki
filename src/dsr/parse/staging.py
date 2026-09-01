@@ -92,3 +92,22 @@ class StagingMark:
     dance: Optional[str]  # None when the source only publishes a combined placement
     recalled: Optional[bool]
     placement: Optional[int]
+
+
+@dataclass
+class StagingScheduledHeat:
+    """One couple's scheduled slot at an upcoming/in-progress competition
+    -- see dsr.models.ScheduledHeat for why this stays separate from the
+    results-oriented staging shapes above."""
+
+    source_event_id: str
+    event_name: str
+    round_name: str
+    heat_number: Optional[str]
+    session: Optional[str]
+    floor: Optional[str]
+    competitor_no: Optional[str]
+    scheduled_time: Optional[dt.datetime]
+    is_complete: bool
+    partner_1: StagingPersonRef
+    partner_2: Optional[StagingPersonRef]
