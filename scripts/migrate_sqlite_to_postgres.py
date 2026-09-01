@@ -36,6 +36,7 @@ from dsr.models import (
     Round,
     Mark,
     Result,
+    ScheduledHeat,
     PairwiseOutcome,
     Rating,
 )
@@ -54,6 +55,7 @@ MODELS_IN_ORDER = [
     Round,
     Mark,
     Result,
+    ScheduledHeat,
     PairwiseOutcome,
     Rating,
 ]
