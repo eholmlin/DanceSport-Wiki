@@ -13,6 +13,7 @@ import streamlit as st
 from sqlalchemy import func, or_, select
 
 from dsr.db import get_engine, get_session
+from dsr.load.wdsf import guess_style
 from dsr.models import CompEvent, Competition, Entry, Mark, Partnership, Person, PersonAlias, Result, Round, ScheduledHeat
 
 st.set_page_config(page_title="DanceSport Wiki", layout="wide")
@@ -536,26 +537,52 @@ def heat_list_for_competition(_session, db_identity: str, competition_id: int) -
     person_ids = {pid for _, p in rows for pid in (p.leader_id, p.follower_id) if pid is not None}
     names = _person_names(_session, person_ids)
 
+    # Field size (how many couples share this exact event+round) needs
+    # every row counted first -- same (source_event_id, round_name) key
+    # ScheduledHeat's own natural key partly uses, since that's what
+    # actually identifies one heat/round instance, not just the event.
+    field_sizes: dict[tuple[str, str], int] = {}
+    for heat, _partnership in rows:
+        key = (heat.source_event_id, heat.round_name)
+        field_sizes[key] = field_sizes.get(key, 0) + 1
+
     out = []
     for heat, partnership in rows:
         parts = [names[pid] for pid in (partnership.leader_id, partnership.follower_id) if pid in names]
+        t = heat.scheduled_time
         out.append(
             {
-                "Time": heat.scheduled_time,
+                "Date": t.date() if t else None,
+                "Day": t.strftime("%A") if t else None,
+                "Time": t.strftime("%I:%M %p").lstrip("0") if t else None,
                 "Couple": " & ".join(parts) if parts else "(solo)",
                 "Event": heat.event_name,
+                # scheduled_heat has no style column of its own (unlike
+                # comp_event, which only exists once results are loaded)
+                # -- computed the same way comp_event's is, straight from
+                # the title text, see dsr.load.wdsf.guess_style.
+                "Style": guess_style(heat.event_name) or "unknown",
+                # Same per-title classification as the dancer page's
+                # Competitive-partners/Instructor-style split (see
+                # _classify_titles/_split_history_by_category) -- reused
+                # directly here rather than duplicated, on the exact same
+                # signal (the event title itself).
+                "Category": _classify_titles([heat.event_name]),
                 "Round": heat.round_name,
                 "Heat #": heat.heat_number,
+                "Field size": field_sizes[(heat.source_event_id, heat.round_name)],
                 "Floor": heat.floor,
                 "Start #": heat.competitor_no,
                 "Danced": "Yes" if heat.is_complete else "No",
                 "Leader": f"?person_id={partnership.leader_id}" if partnership.leader_id is not None else None,
                 "Follower": f"?person_id={partnership.follower_id}" if partnership.follower_id is not None else None,
+                "_scheduled_time": t,
+                "_partnership_id": partnership.id,
             }
         )
     df = pd.DataFrame(out)
     if not df.empty:
-        df = df.sort_values("Time", na_position="last").reset_index(drop=True)
+        df = df.sort_values("_scheduled_time", na_position="last").reset_index(drop=True)
     return df
 
 
@@ -1173,15 +1200,33 @@ def heat_list_search(session) -> None:
         st.write("No scheduled heats on file for this competition.")
         return
 
-    filter_cols = st.columns(2)
+    # Three pulldowns (style/category/floor) stacked in one column, under
+    # the text-filter row's third slot -- keeps the two free-text filters
+    # (name, event) and the first pulldown on one clean line, per user
+    # request, rather than 5 filters crowded into one row. The event
+    # filter's label is kept short (example moved to `help`, a hover
+    # tooltip) specifically so it stays one line -- a wrapped 2-line
+    # label pushed its own input box down out of line with its neighbors.
+    filter_cols = st.columns(3)
     name_filter = filter_cols[0].text_input("Filter by dancer name", "")
+    event_filter = filter_cols[1].text_input("Filter by event title", "", help="e.g. 'Youth', 'Under 21'")
+    styles = sorted(s for s in df["Style"].unique().tolist())
+    style_choice = filter_cols[2].selectbox("Filter by style", ["All"] + styles)
+    categories = sorted(c for c in df["Category"].unique().tolist())
+    category_choice = filter_cols[2].selectbox("Filter by category", ["All"] + categories)
     floors = sorted(f for f in df["Floor"].dropna().unique().tolist())
-    floor_choice = filter_cols[1].selectbox("Filter by floor", ["All"] + floors)
+    floor_choice = filter_cols[2].selectbox("Filter by floor", ["All"] + floors)
     hide_danced = st.checkbox("Hide heats already danced", value=True)
 
     filtered = df
     if name_filter:
         filtered = filtered[filtered["Couple"].str.contains(name_filter, case=False, na=False)]
+    if event_filter:
+        filtered = filtered[filtered["Event"].str.contains(event_filter, case=False, na=False)]
+    if style_choice != "All":
+        filtered = filtered[filtered["Style"] == style_choice]
+    if category_choice != "All":
+        filtered = filtered[filtered["Category"] == category_choice]
     if floor_choice != "All":
         filtered = filtered[filtered["Floor"] == floor_choice]
     if hide_danced:
@@ -1191,7 +1236,39 @@ def heat_list_search(session) -> None:
     if filtered.empty:
         st.write("No scheduled heats match this filter.")
         return
-    st.dataframe(filtered, use_container_width=True, hide_index=True, column_config=_PARTNER_LINK_COLUMN_CONFIG)
+
+    # Grouped by partnership (one expander per couple, each showing just
+    # their own heats sorted by time) rather than one giant flat table --
+    # real feedback: a dancer with several partnerships (e.g. a Pro-Am
+    # instructor) had every partner's heats interleaved in one table with
+    # no way to tell them apart. Capped rather than always grouping: with
+    # no name/event narrowing, a competition-wide view can be 900+
+    # partnerships, and rendering that many expanders at once is neither
+    # fast nor useful -- the flat table (sorted by time, which is what a
+    # "what's coming up next" view actually wants) stays the fallback.
+    partnership_ids = filtered["_partnership_id"].unique()
+    display_cols = [c for c in df.columns if not c.startswith("_")]
+    if len(partnership_ids) > 40:
+        st.caption(f"{len(partnership_ids)} different partnerships match -- narrow by dancer name to group by couple.")
+        st.dataframe(
+            filtered, use_container_width=True, hide_index=True, column_order=display_cols,
+            column_config=_PARTNER_LINK_COLUMN_CONFIG,
+        )
+        return
+
+    groups = list(filtered.groupby("_partnership_id", sort=False))
+    groups.sort(
+        key=lambda pair: pair[1]["_scheduled_time"].iloc[0]
+        if not pair[1]["_scheduled_time"].isna().all()
+        else pd.Timestamp.max
+    )
+    for _partnership_id, group in groups:
+        couple = group["Couple"].iloc[0]
+        with st.expander(f"{couple} -- {len(group)} heats", expanded=False):
+            st.dataframe(
+                group, use_container_width=True, hide_index=True, column_order=display_cols,
+                column_config=_PARTNER_LINK_COLUMN_CONFIG,
+            )
 
 
 def dancer_search(session, *, linked_person_id: int | None = None) -> None:
