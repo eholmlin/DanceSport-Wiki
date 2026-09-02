@@ -1217,6 +1217,19 @@ def heat_list_search(session, *, linked_competition_id: int | None = None, linke
         st.write("No scheduled heats on file for this competition.")
         return
 
+    if linked_event_id is not None:
+        # Real confusion this caused: the filters below stayed visible on
+        # the single-event view, but a name/style/etc. search only ever
+        # narrowed *within* that one locked event, with no visible way to
+        # widen back out -- looked like the filters were broken rather
+        # than just scoped tighter than they appeared. This link drops
+        # just the event lock (via st.query_params, so it survives the
+        # rerun) and falls back to browsing this competition's full
+        # schedule, same as picking it from the dropdown fresh.
+        if st.button("Show full competition schedule"):
+            st.query_params.pop("heat_event_id", None)
+            st.rerun()
+
     # Three pulldowns (style/category/floor) stacked in one column, under
     # the text-filter row's third slot -- keeps the two free-text filters
     # (name, event) and the first pulldown on one clean line, per user
@@ -1240,11 +1253,15 @@ def heat_list_search(session, *, linked_competition_id: int | None = None, linke
         filtered = filtered[filtered["Couple"].str.contains(name_filter, case=False, na=False)]
     if event_filter:
         filtered = filtered[filtered["Event"].str.contains(event_filter, case=False, na=False)]
-    elif linked_event_id is not None:
+    elif linked_event_id is not None and not name_filter:
         # Exact match on the stable source event id, not the title text --
         # a substring filter could also catch unrelated events that
         # happen to share wording (e.g. the same division name at a
-        # different level).
+        # different level). Only applied when the user hasn't typed a
+        # name filter of their own -- typing a name is a clear signal
+        # they want to search this competition's *whole* schedule for
+        # that dancer, not stay boxed into the one event they linked in
+        # from (see the "Show full competition schedule" button above).
         filtered = filtered[filtered["_source_event_id"] == linked_event_id]
     if style_choice != "All":
         filtered = filtered[filtered["Style"] == style_choice]
@@ -1438,6 +1455,16 @@ def main() -> None:
     linked_person_id = st.query_params.get("person_id")
     linked_heat_competition_id = st.query_params.get("heat_competition_id")
     linked_heat_event_id = st.query_params.get("heat_event_id")
+
+    # A link opens in a new tab (see the comment above), so there's no
+    # in-app history to go "back" through -- without this, the only way
+    # off a linked-in view was to close the tab or hand-edit the URL.
+    # Clearing every query param drops all three linked_* pairs at once
+    # and re-picks the default (unlinked) Dancer-search view below.
+    if st.query_params:
+        if st.button("← New search"):
+            st.query_params.clear()
+            st.rerun()
 
     mode_options = ["Dancer", "Competition", "Heat Lists"]
     if linked_heat_competition_id:
