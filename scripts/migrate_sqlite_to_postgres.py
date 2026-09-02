@@ -13,9 +13,18 @@ create the schema (this script only copies rows, it doesn't create tables).
 
 Usage:
     DSR_DATABASE_URL=postgresql://... python scripts/migrate_sqlite_to_postgres.py
+    DSR_DATABASE_URL=postgresql://... python scripts/migrate_sqlite_to_postgres.py --table scheduled_heat
+
+--table copies only the named table(s) (comma-separated, dependency order
+doesn't matter -- MODELS_IN_ORDER's own order is preserved regardless of
+the order given). Real case that motivated this: adding one new,
+independent table (scheduled_heat, ~9k rows) otherwise meant re-copying
+every table including mark (~16M rows, ~2 hours) just to sync the new
+one -- a single unrelated table shouldn't force a full resync.
 """
 from __future__ import annotations
 
+import argparse
 import os
 import time
 
@@ -97,15 +106,33 @@ def reset_sequence(pg_engine, model) -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--table",
+        type=str,
+        default=None,
+        help="comma-separated table name(s) to copy, e.g. 'scheduled_heat'; default copies every table",
+    )
+    args = parser.parse_args()
+
     pg_url = os.environ.get("DSR_DATABASE_URL")
     if not pg_url or not pg_url.startswith("postgres"):
         raise SystemExit("Set DSR_DATABASE_URL to the target Postgres URL before running this script.")
+
+    if args.table:
+        wanted = set(args.table.split(","))
+        models = [m for m in MODELS_IN_ORDER if m.__tablename__ in wanted]
+        unknown = wanted - {m.__tablename__ for m in models}
+        if unknown:
+            raise SystemExit(f"Unknown table name(s): {', '.join(sorted(unknown))}")
+    else:
+        models = MODELS_IN_ORDER
 
     sqlite_engine = create_engine(f"sqlite:///{DEFAULT_DB_PATH}")
     sqlite_session = sessionmaker(bind=sqlite_engine, future=True)()
     pg_engine = create_engine(pg_url, future=True)
 
-    for model in MODELS_IN_ORDER:
+    for model in models:
         t0 = time.time()
         n = copy_table(sqlite_session, pg_engine, model)
         reset_sequence(pg_engine, model)
