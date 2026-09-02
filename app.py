@@ -196,6 +196,11 @@ _PARTNER_LINK_COLUMN_CONFIG = {
     "Follower": st.column_config.LinkColumn("Follower", display_text="View ->"),
 }
 
+# The Heat Lists page's own "View event" column (see heat_list_for_
+# competition) -- a relative "?heat_competition_id=...&heat_event_id=..."
+# URL back into this same page, re-filtered to that event's whole field.
+_HEAT_EVENT_LINK_COLUMN_CONFIG = {"View event": st.column_config.LinkColumn("View event", display_text="View ->")}
+
 
 @st.cache_data(ttl=600)
 def result_histories_for_partnerships(_session, db_identity: str, partnership_ids: list[int]) -> dict[int, pd.DataFrame]:
@@ -522,13 +527,16 @@ def competitions_with_heatlists(session, term: str | None = None, limit: int = 2
 
 @st.cache_data(ttl=600)
 def heat_list_for_competition(_session, db_identity: str, competition_id: int) -> pd.DataFrame:
-    """Every scheduled_heat row for one competition, partner names and
-    View links joined in via one batched query -- same _person_names/
-    "?person_id=..." link convention as _field_results_for_comp_events,
-    so the same _PARTNER_LINK_COLUMN_CONFIG renders both. Cached (see
-    search_people's docstring for why this is safe) since a competition's
-    heat list can run into the thousands of rows and gets reloaded
-    every time a filter widget below changes."""
+    """Every scheduled_heat row for one competition, partner names and a
+    "View event" link joined in via one batched query. The link is a
+    relative "?heat_competition_id=...&heat_event_id=..." URL back into
+    this same page (see main()'s linked_heat_* handling and
+    heat_list_search) -- clicking it re-filters to every couple entered
+    in that exact event (same source_event_id, every round), the "who
+    else is in this division with me" view. Cached (see search_people's
+    docstring for why this is safe) since a competition's heat list can
+    run into the thousands of rows and gets reloaded every time a filter
+    widget below changes."""
     rows = _session.execute(
         select(ScheduledHeat, Partnership)
         .join(Partnership, ScheduledHeat.partnership_id == Partnership.id)
@@ -574,10 +582,10 @@ def heat_list_for_competition(_session, db_identity: str, competition_id: int) -
                 "Floor": heat.floor,
                 "Start #": heat.competitor_no,
                 "Danced": "Yes" if heat.is_complete else "No",
-                "Leader": f"?person_id={partnership.leader_id}" if partnership.leader_id is not None else None,
-                "Follower": f"?person_id={partnership.follower_id}" if partnership.follower_id is not None else None,
+                "View event": f"?heat_competition_id={competition_id}&heat_event_id={heat.source_event_id}",
                 "_scheduled_time": t,
                 "_partnership_id": partnership.id,
+                "_source_event_id": heat.source_event_id,
             }
         )
     df = pd.DataFrame(out)
@@ -1161,30 +1169,39 @@ def competition_search(session, *, linked_competition_id: int | None = None, lin
                 st.dataframe(detail_df, use_container_width=True, hide_index=True, column_order=detail_cols)
 
 
-def heat_list_search(session) -> None:
+def heat_list_search(session, *, linked_competition_id: int | None = None, linked_event_id: str | None = None) -> None:
     """Pre-competition schedules -- NDCA Premier only for now (see
     dsr.models.ScheduledHeat), loaded via scripts/bulk_load_ndca_heatlists.py.
-    Deliberately doesn't require a search term first, unlike competition_search:
-    there are only ever a handful of competitions with a published heat list
-    on file at any given time, so listing them directly is more useful than
-    making the user guess a name to search."""
+    A pulldown of every competition with a published heat list, not a
+    name search first like competition_search -- there are only ever a
+    handful on file at any given time, so listing them directly (and
+    letting the user just pick one) is more useful than making them
+    guess a name to search.
+
+    linked_competition_id/linked_event_id come from a "View event" link
+    on this same page (see heat_list_for_competition and main()) -- when
+    set, the pulldown defaults to that competition. If the user picks a
+    different one instead, linked_event_id is dropped -- it belonged to
+    whichever competition the link named, not the newly-picked one."""
     db_identity = _db_identity(session)
     st.caption("Pre-competition schedules for upcoming/in-progress NDCA Premier competitions.")
-    term = st.text_input("Filter by competition name (optional)", "", key="heatlist_competition_term")
-    competitions = competitions_with_heatlists(session, term or None)
+    competitions = competitions_with_heatlists(session)
     if not competitions:
-        if term:
-            st.warning(f"No competitions with a published heat list found matching {term!r}.")
-        else:
-            st.info("No competitions with a published heat list on file right now.")
+        st.info("No competitions with a published heat list on file right now.")
         return
 
-    if len(competitions) == 1:
-        competition = competitions[0]
-    else:
-        options = {f"{c.name} ({c.start_date})  -- id {c.id}": c for c in competitions}
-        choice = st.selectbox("Multiple matches -- pick one:", list(options.keys()))
-        competition = options[choice]
+    options = {f"{c.name} ({c.start_date})": c for c in competitions}
+    option_labels = list(options.keys())
+    default_index = 0
+    if linked_competition_id is not None:
+        for i, c in enumerate(competitions):
+            if c.id == linked_competition_id:
+                default_index = i
+                break
+    choice = st.selectbox("Select a competition", option_labels, index=default_index)
+    competition = options[choice]
+    if competition.id != linked_competition_id:
+        linked_event_id = None
 
     st.header(competition.name)
     cols = st.columns(3)
@@ -1223,6 +1240,12 @@ def heat_list_search(session) -> None:
         filtered = filtered[filtered["Couple"].str.contains(name_filter, case=False, na=False)]
     if event_filter:
         filtered = filtered[filtered["Event"].str.contains(event_filter, case=False, na=False)]
+    elif linked_event_id is not None:
+        # Exact match on the stable source event id, not the title text --
+        # a substring filter could also catch unrelated events that
+        # happen to share wording (e.g. the same division name at a
+        # different level).
+        filtered = filtered[filtered["_source_event_id"] == linked_event_id]
     if style_choice != "All":
         filtered = filtered[filtered["Style"] == style_choice]
     if category_choice != "All":
@@ -1237,22 +1260,42 @@ def heat_list_search(session) -> None:
         st.write("No scheduled heats match this filter.")
         return
 
-    # Grouped by partnership (one expander per couple, each showing just
-    # their own heats sorted by time) rather than one giant flat table --
-    # real feedback: a dancer with several partnerships (e.g. a Pro-Am
-    # instructor) had every partner's heats interleaved in one table with
-    # no way to tell them apart. Capped rather than always grouping: with
-    # no name/event narrowing, a competition-wide view can be 900+
-    # partnerships, and rendering that many expanders at once is neither
-    # fast nor useful -- the flat table (sorted by time, which is what a
-    # "what's coming up next" view actually wants) stays the fallback.
-    partnership_ids = filtered["_partnership_id"].unique()
     display_cols = [c for c in df.columns if not c.startswith("_")]
+
+    # A single event (every remaining row shares one source_event_id --
+    # true right after a "View event" link, and also whenever a manual
+    # event-title filter happens to narrow to just one division) renders
+    # as one flat table of every couple in that field, same shape as the
+    # Competition page's own results table -- not grouped by partnership,
+    # since there's exactly one heat per couple here and grouping would
+    # just wrap each single row in its own pointless expander. The
+    # self-referential "View event" link is dropped too, for the same
+    # reason the Competition page's results table has no such column.
+    if filtered["_source_event_id"].nunique() == 1:
+        st.write(f"**{filtered['Event'].iloc[0]}**")
+        # "Event" dropped too -- it's the same value on every row once
+        # the table is already scoped to this one event, same reasoning
+        # as dropping the self-referential "View event" link.
+        event_cols = [c for c in display_cols if c not in ("View event", "Event")]
+        st.dataframe(filtered, use_container_width=True, hide_index=True, column_order=event_cols)
+        return
+
+    # Otherwise, grouped by partnership (one expander per couple, each
+    # showing just their own heats sorted by time) rather than one giant
+    # flat table -- real feedback: a dancer with several partnerships
+    # (e.g. a Pro-Am instructor) had every partner's heats interleaved in
+    # one table with no way to tell them apart. Capped rather than always
+    # grouping: with no name/event narrowing, a competition-wide view can
+    # be 900+ partnerships, and rendering that many expanders at once is
+    # neither fast nor useful -- the flat table (sorted by time, which is
+    # what a "what's coming up next" view actually wants) stays the
+    # fallback.
+    partnership_ids = filtered["_partnership_id"].unique()
     if len(partnership_ids) > 40:
         st.caption(f"{len(partnership_ids)} different partnerships match -- narrow by dancer name to group by couple.")
         st.dataframe(
             filtered, use_container_width=True, hide_index=True, column_order=display_cols,
-            column_config=_PARTNER_LINK_COLUMN_CONFIG,
+            column_config=_HEAT_EVENT_LINK_COLUMN_CONFIG,
         )
         return
 
@@ -1267,7 +1310,7 @@ def heat_list_search(session) -> None:
         with st.expander(f"{couple} -- {len(group)} heats", expanded=False):
             st.dataframe(
                 group, use_container_width=True, hide_index=True, column_order=display_cols,
-                column_config=_PARTNER_LINK_COLUMN_CONFIG,
+                column_config=_HEAT_EVENT_LINK_COLUMN_CONFIG,
             )
 
 
@@ -1384,17 +1427,25 @@ def main() -> None:
     session = _session()
     st.title("DanceSport Wiki")
 
-    # A "View"/"Leader"/"Follower" link clicked on either page (opens a
-    # new tab, so this is a fresh session -- see result_histories_for_
-    # partnerships and _field_results_for_comp_events) lands here with
-    # one of these two pairs set; used to jump straight to that exact
-    # event or dancer instead of making the user re-search for it.
+    # A "View"/"Leader"/"Follower"/"View event" link clicked on any page
+    # (opens a new tab, so this is a fresh session -- see
+    # result_histories_for_partnerships, _field_results_for_comp_events,
+    # and heat_list_for_competition) lands here with one of these pairs
+    # set; used to jump straight to that exact event/dancer/heat-list
+    # instead of making the user re-search for it.
     linked_competition_id = st.query_params.get("competition_id")
     linked_event_id = st.query_params.get("event_id")
     linked_person_id = st.query_params.get("person_id")
+    linked_heat_competition_id = st.query_params.get("heat_competition_id")
+    linked_heat_event_id = st.query_params.get("heat_event_id")
 
     mode_options = ["Dancer", "Competition", "Heat Lists"]
-    default_mode_index = mode_options.index("Competition") if linked_competition_id else 0
+    if linked_heat_competition_id:
+        default_mode_index = mode_options.index("Heat Lists")
+    elif linked_competition_id:
+        default_mode_index = mode_options.index("Competition")
+    else:
+        default_mode_index = 0
     mode = st.radio("Search by", mode_options, horizontal=True, index=default_mode_index)
     if mode == "Dancer":
         dancer_search(session, linked_person_id=int(linked_person_id) if linked_person_id else None)
@@ -1405,7 +1456,11 @@ def main() -> None:
             linked_event_id=int(linked_event_id) if linked_event_id else None,
         )
     else:
-        heat_list_search(session)
+        heat_list_search(
+            session,
+            linked_competition_id=int(linked_heat_competition_id) if linked_heat_competition_id else None,
+            linked_event_id=linked_heat_event_id,
+        )
 
 
 if __name__ == "__main__":
