@@ -56,7 +56,18 @@ def discover_competitions(fetcher: PoliteFetcher, session, start: dt.date, end: 
                 comp_start = dt.datetime.strptime(e["Start_Date"], "%m/%d/%Y").date()
             except (KeyError, ValueError):
                 continue
-            if start <= comp_start <= end:
+            try:
+                comp_end = dt.datetime.strptime(e["End_Date"], "%m/%d/%Y").date()
+            except (KeyError, ValueError):
+                comp_end = comp_start
+            # Overlap test, not "starts within window": a multi-day
+            # competition that started before `start` (e.g. run today,
+            # the day after it opened) but hasn't finished yet is exactly
+            # the case a daily refresh most needs to catch -- its heat
+            # list is still being updated live. Filtering on Start_Date
+            # alone dropped it from the window the moment its start date
+            # passed, even mid-competition.
+            if comp_end >= start and comp_start <= end:
                 seen_cyi.add(cyi)
                 found.append((str(cyi), e.get("Competition_Name", ""), comp_start))
     found.sort(key=lambda t: t[2])
