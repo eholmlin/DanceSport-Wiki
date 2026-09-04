@@ -384,18 +384,33 @@ def test_classify_titles_abandoned_person_level_pro_am_status_in_favor_of_event_
     assert _classify_titles(["ProAm Youth Scholarship Int'l Latin"]) == "Instructor-style"
 
 
-def test_classify_titles_treats_combined_title_as_instructor_style():
+def test_classify_titles_treats_combined_title_with_role_code_as_instructor_style():
     # A single NDCA event is often open to multiple eligibility categories
     # at once (e.g. "ProAm, Mixed Am, AmAm Youth Single..."), with no field
     # distinguishing which category a specific couple in that heat actually
-    # registered under -- so a title that mixes an AmAm-eligible marker
-    # *and* a Pro-Am/Mixed-Am-eligible marker is still bucketed as
-    # instructor-style, not competitive: a genuinely peer amateur couple
-    # (verified against real data) never has a Pro-Am/Mixed-Am marker in
-    # any of its titles at all.
+    # registered under. When such a combined-eligibility title ALSO carries
+    # a single-role division code (see _ROLE_DIVISION_CODE), the role code
+    # alone decides it -- it can't apply to a genuine peer amateur couple no
+    # matter what else the title says.
     assert (
         _classify_titles(["ProAm, Mixed Am, AmAm Youth Single LG-YH Op. Full Gold Int'l Cha Cha"])
         == "Instructor-style"
+    )
+
+
+def test_classify_titles_treats_combined_title_without_role_code_as_competitive():
+    # Real bug: a combined-eligibility title with no role code says nothing
+    # couple-specific -- it's NDCA bundling every category into one heat
+    # (events too small to split by category), not evidence this couple is
+    # Pro-Am. Dmitry Dragunov & Michelle Bogomolny's multi-year, AM/AM-only
+    # Championship history (including a U.S. National title) had a chunk of
+    # its "Single" results wrongly bucketed as Instructor-style purely
+    # because those combined-eligibility titles also mentioned "Mixed Am".
+    # Fixed by only trusting Pro-Am/Mixed-Am wording as decisive when the
+    # same title doesn't ALSO list AmAm as eligible.
+    assert (
+        _classify_titles(["ProAm, Mixed Am, AmAm Youth Single AC-TB Cl. PreBronze Int'l Cha Cha"])
+        == "Competitive partners"
     )
 
 

@@ -365,47 +365,71 @@ def _classify_titles(titles: list[str]) -> str:
     single event/heat is often open to *multiple* categories at once (e.g.
     "ProAm, Mixed Am, AmAm Youth Single..."), with no per-couple field
     distinguishing which category any specific couple in that heat
-    actually registered under. So a lone title can't be trusted; instead
-    every title this partnership ever competed under is scanned, and a
-    Pro-Am/Mixed-Am marker anywhere is treated as decisive even if some of
-    those same titles also list AmAm as eligible -- a genuinely peer
-    amateur couple's titles never carry a Pro-Am/Mixed-Am marker at all
-    (verified: zero of professional Umario Diallo's 18 partnerships land
-    in the amateur bucket, while Arsenii's 3 user-confirmed competitive
-    partners -- Sofia Chubay, Emily Tatoosi, Mishella Vishnevskiy -- and 2
-    more the rule newly surfaced all do).
-
-    When no title carries any marker at all, three more signals apply, in
-    order:
+    actually registered under. So a lone title can't be trusted, and
+    signals are checked in this order:
 
     1. The title carries a single-role division code (see
-    _ROLE_DIVISION_CODE) -- the same single-dance Pro-Am progression as
-    rule 2 below, just missing the literal words "Single Dance" and any
-    eligibility marker. Checked per-title (not "all titles"), since this is
-    a strong enough signal on its own -- one such title in an otherwise
-    marked partnership is still that same partnership's Pro-Am history.
+    _ROLE_DIVISION_CODE) -- names only the *student's* level, so it cannot
+    apply to a genuine peer amateur couple no matter what else the title
+    says. Checked first and decisive regardless of anything else in the
+    same title (verified: zero titles in the whole database combine a role
+    code with an AmAm-eligible marker and no Pro-Am/Mixed-Am wording at
+    all) -- one such title in an otherwise-unmarked partnership is still
+    that same partnership's Pro-Am history.
 
-    2. Every title is an isolated "Single Dance" event (never multi-dance/
-    scholarship/championship) -- how a coach runs a beginner Pro-Am student
-    through their first events one dance at a time (verified: Arsenii
-    Moroz's 4 confirmed competitive partners are 0% single-dance each,
-    while 4 of his unmarked partnerships are 100% single-dance each -- a
-    clean split, no overlap). Intentionally narrow (100% single-dance, not
-    just "mostly"): it does NOT generalize to every unmarked partnership --
-    Umario Diallo's own unmarked partnerships are mostly *not*
-    single-dance-heavy despite him being a confirmed professional, so those
-    fall through to the next rule instead.
+    2. A Pro-Am/Mixed-Am marker (word or abbreviated form) is decisive --
+    but only when the *same* title doesn't also explicitly list AmAm as
+    eligible. A combined-eligibility title ("ProAm, Mixed Am, AmAm Youth
+    Single...") says nothing couple-specific -- it's NDCA bundling every
+    category into one heat for events too small to split, not evidence
+    this couple is Pro-Am. Real case that motivated this: Dmitry Dragunov &
+    Michelle Bogomolny's multi-year, AM/AM-only Championship history
+    (including a U.S. National title) had a chunk of "Single" results
+    wrongly bucketed as Instructor-style purely because those
+    combined-eligibility titles also happened to say "Mixed Am". Re-checked
+    against the two people this whole marker scheme was originally built
+    on: of Umario Diallo's and Arsenii Moroz's 260 combined-eligibility
+    titles between them, 257 are unaffected (caught by rule 1's role code
+    instead) and only 3 of Arsenii's flip to Competitive.
 
-    3. Otherwise (a real multi-dance/scholarship/championship title exists
-    but never carries a Pro-Am/Mixed-Am marker) -- per user direction, an
-    unmarked multi-dance format is assumed competitive rather than left
-    ambiguous, since NDCA doesn't always bother spelling out "AM/AM" on
-    events that are amateur-only by construction (real case: Sofia Chubay &
-    Daniel Saba's "Amateur PreChampionship 4-Dance"/"Amateur Open 4/5-Dance"
-    titles never say "AM/AM" but are clearly not Pro-Am/Mixed-Am either).
-    A joint "AC-" ("Amateur Couple") division code needs no explicit rule
-    of its own here -- it just falls through to this same default, and
-    never collides with rule 1's role codes (see _ROLE_DIVISION_CODE).
+    3. Otherwise (no role code, no exclusively-Pro-Am/Mixed-Am marker) --
+    fall through to two more signals, in order:
+
+       a. AM/AM/AmAm is listed anywhere -- Competitive (this also now
+       catches combined-eligibility titles that rule 2 declined to decide,
+       e.g. Dmitry's, since AmAm being listed is real, if weak, amateur
+       evidence once nothing stronger overrides it).
+
+       b. Every title is an isolated "Single Dance" event (never
+       multi-dance/scholarship/championship) -- how a coach runs a
+       beginner Pro-Am student through their first events one dance at a
+       time (verified: Arsenii Moroz's 4 confirmed competitive partners
+       are 0% single-dance each, while 4 of his unmarked partnerships are
+       100% single-dance each -- a clean split, no overlap). Intentionally
+       narrow (100% single-dance, not just "mostly"): it does NOT
+       generalize to every unmarked partnership -- Umario Diallo's own
+       unmarked partnerships are mostly *not* single-dance-heavy despite
+       him being a confirmed professional, so those fall through to the
+       final default instead.
+
+    4. Final default: a real multi-dance/scholarship/championship title
+    exists but never carries any marker -- per user direction, assumed
+    competitive rather than left ambiguous, since NDCA doesn't always
+    bother spelling out "AM/AM" on events that are amateur-only by
+    construction (real case: Sofia Chubay & Daniel Saba's "Amateur
+    PreChampionship 4-Dance"/"Amateur Open 4/5-Dance" titles never say
+    "AM/AM" but are clearly not Pro-Am/Mixed-Am either). A joint "AC-"
+    ("Amateur Couple") division code needs no explicit rule of its own --
+    it falls through to this same default (or to 3a above, when the title
+    happens to also say AmAm), and never collides with rule 1's role codes
+    (see _ROLE_DIVISION_CODE).
+
+    Note "mS1"/"mP2"/"mJ2"-style codes are NOT role codes despite the
+    superficial resemblance to "mL-"/"mG-" -- they're age/skill brackets
+    that show up in plainly amateur-only titles too (e.g. "Amateur Open 4 &
+    5 Dance mS1 Int'l Ballroom", no Pro-Am wording at all) -- confirmed by
+    checking before adding them to _ROLE_DIVISION_CODE, which would have
+    misclassified those.
 
     "Other partnerships" is now reachable only when a partnership has no
     event titles on record at all.
@@ -413,14 +437,44 @@ def _classify_titles(titles: list[str]) -> str:
     if not titles:
         return "Other partnerships"
     lowered = [t.lower() for t in titles]
-    if any(marker in t for t in lowered for marker in _INSTRUCTOR_TITLE_MARKERS):
+    # Role-division code checked first, ahead of the marker-word checks below:
+    # it's the one signal here that's decisive regardless of what else the
+    # same title says, since a single-role level code (naming only the
+    # student's level) cannot apply to a genuine peer amateur couple no
+    # matter how the title otherwise reads (verified: zero titles in the
+    # whole database combine a role code with an amateur marker and no
+    # instructor wording).
+    if any(_ROLE_DIVISION_CODE.search(t) for t in titles):
         return "Instructor-style"
-    if any(_INSTRUCTOR_WORD_MARKER.search(t) for t in titles):
+    # A title that names Pro-Am/Mixed-Am wording is only decisive on its own
+    # when it does NOT *also* explicitly list AmAm as eligible -- NDCA
+    # commonly bundles all three categories into one combined heat (e.g.
+    # "ProAm, Mixed Am, AmAm Youth Single ...") for events too small to
+    # split by category, and that phrasing says nothing about which
+    # category this specific couple actually registered under. Real case:
+    # Dmitry Dragunov & Michelle Bogomolny's multi-year AM/AM-only
+    # Championship history (including a U.S. National title) got a chunk of
+    # its "Single" results wrongly bucketed as Instructor-style purely
+    # because those combined-eligibility titles happened to also mention
+    # "Mixed Am". Re-verified against the two people this whole marker
+    # scheme was originally built on (Umario Diallo, Arsenii Moroz): of 260
+    # combined-eligibility titles across both, 257 are unaffected because
+    # they carry a role code too (caught by the check above) -- only 3 of
+    # Arsenii's flip to Competitive.
+    if any(
+        any(marker in t for marker in _INSTRUCTOR_TITLE_MARKERS)
+        and not any(am_marker in t for am_marker in _AMATEUR_TITLE_MARKERS)
+        for t in lowered
+    ):
+        return "Instructor-style"
+    if any(
+        _INSTRUCTOR_WORD_MARKER.search(title)
+        and not any(am_marker in t for am_marker in _AMATEUR_TITLE_MARKERS)
+        for title, t in zip(titles, lowered)
+    ):
         return "Instructor-style"
     if any(marker in t for t in lowered for marker in _AMATEUR_TITLE_MARKERS):
         return "Competitive partners"
-    if any(_ROLE_DIVISION_CODE.search(t) for t in titles):
-        return "Instructor-style"
     if all("single dance" in t for t in lowered):
         return "Instructor-style"
     return "Competitive partners"
