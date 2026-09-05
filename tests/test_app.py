@@ -444,21 +444,55 @@ def test_classify_titles_falls_back_to_other_when_no_titles_at_all():
 
 
 def test_classify_titles_treats_all_single_dance_titles_as_instructor_style():
-    # Second-tier signal when no title carries an explicit marker: titles
-    # that are all isolated "Single Dance" events (never multi-dance/
-    # scholarship/championship) is how a coach runs a beginner Pro-Am
-    # student through their first events one dance at a time -- real case:
-    # 4 of Arsenii Moroz's unmarked partnerships (Ava Marukhyan, Penelope
-    # Moskovyan, Ariana Harutyunyan, Victoria Avanesov) are 100%
-    # single-dance, vs. 0% for each of his 4 confirmed genuine competitive
-    # partners.
+    # Whole-partnership aggregate signal, only meaningful with more than one
+    # title: when every title this partnership ever competed under is an
+    # isolated "Single Dance" event (never multi-dance/scholarship/
+    # championship), with no role code and no other marker, that's how a
+    # coach runs a beginner Pro-Am student through their first events one
+    # dance at a time -- real case: 4 of Arsenii Moroz's unmarked
+    # partnerships (Ava Marukhyan, Penelope Moskovyan, Ariana Harutyunyan,
+    # Victoria Avanesov) are 100% single-dance, vs. 0% for each of his 4
+    # confirmed genuine competitive partners.
     assert (
         _classify_titles(
             [
-                "Kids Single Dances mL-T2 Cl. Full Bronze Int'l Cha Cha",
-                "Kids Single Dances mL-T2 Cl. Full Bronze Int'l Samba",
+                "Kids Single Dances AC-T2 Cl. Full Bronze Int'l Cha Cha",
+                "Kids Single Dances AC-T2 Cl. Full Bronze Int'l Samba",
             ]
         )
+        == "Instructor-style"
+    )
+
+
+def test_classify_titles_does_not_apply_single_dance_rule_to_one_title():
+    # Real bug: every actual call site in the app (_split_history_by_category,
+    # the Heat Lists "Category" column) passes a single-element list, where
+    # "every title is single-dance" trivially degenerates to "is this one
+    # title single-dance" -- a much weaker per-event signal, since plenty of
+    # competitions run youth divisions dance-by-dance regardless of Pro-Am
+    # status. Real case: Dmitry Dragunov & Michelle Bogomolny's "Amateur PT-
+    # JR-YH Single Dances m-TB Newcomer Int'l Cha Cha" (explicitly labeled
+    # "Amateur", no role code, no Pro-Am wording) was wrongly bucketed as
+    # Instructor-style purely for being scored as one dance. Guarding the
+    # rule on len(titles) > 1 keeps it for its validated aggregate use
+    # (test above) without it firing per-row.
+    assert (
+        _classify_titles(["Amateur PT-JR-YH Single Dances m-TB Newcomer Int'l Cha Cha"]) == "Competitive partners"
+    )
+
+
+def test_classify_titles_normalizes_underscore_joined_word_markers():
+    # Real bug: NDCA sometimes joins its abbreviated combined-eligibility
+    # words with an underscore instead of a space ("US National PA_MA TB_PT
+    # CL. Championships..."), and "_" counts as a word character in regex,
+    # so \bMA\b never matched "PA_MA" as written -- 60 titles database-wide
+    # follow this exact pattern. Real case that surfaced this: Eric
+    # Groysman & Ella Li's heat for this exact title at United States Dance
+    # Championships showed as Competitive on the Heat Lists page while
+    # every other heat for that same partnership (all carrying an explicit
+    # "L-P1" role code) showed Instructor-style.
+    assert (
+        _classify_titles(["US National PA_MA TB_PT CL. Championships P1 M/F Int'l Latin (CC,S,R,PD,J)"])
         == "Instructor-style"
     )
 
@@ -552,16 +586,24 @@ def test_split_history_by_category_keeps_empty_partnership_under_other():
     assert split["Other partnerships"].empty
 
 
-def test_split_history_by_category_promotes_same_day_amam_title_to_instructor_style():
-    # Real case: Arsenii Moroz & Eliana Rose Ben Dov's "Youth Bronze
-    # 3-Dance Open J1 AM/AM Int'l Latin (CC,S,R)" carries only the AM/AM
-    # marker on its own, but landed on the same date (The Royal Ball,
-    # 2023-03-18) as 5 Pro-Am "Youth Single Dance ... Int'l <dance>"
-    # titles covering those exact same 3 dances plus 2 more -- a combined
-    # placement derived from dances already scored individually as
-    # Pro-Am. NDCA's own title for the combined round doesn't repeat the
-    # eligibility wording, so the per-title rule alone can't catch it;
-    # the same-day sibling promotes it instead.
+def test_split_history_by_category_no_longer_promotes_via_removed_single_dance_signal():
+    # Real case, and a known accepted trade-off: Arsenii Moroz & Eliana Rose
+    # Ben Dov's "Youth Bronze 3-Dance Open J1 AM/AM Int'l Latin (CC,S,R)"
+    # landed on the same date (The Royal Ball, 2023-03-18) as 5 "Youth
+    # Single Dance AC-mLJ2 ..." titles, which used to promote it to
+    # Instructor-style via the same-day override -- but only because those
+    # 5 siblings were themselves classified Instructor-style by the
+    # per-row single-dance rule (see
+    # test_classify_titles_does_not_apply_single_dance_rule_to_one_title),
+    # which is gone now. "AC-mLJ2" has no hyphen before the level code, so
+    # it doesn't match _ROLE_DIVISION_CODE either, and extending that regex
+    # to catch unhyphenated forms was tried and rejected: it matches 3,652
+    # other titles database-wide with no independent way to verify each one
+    # (unlike the 60-title PA_MA fix), including at least one titled
+    # "Am Single Dance" outright. So this one date, for this one
+    # partnership, reverts to Competitive -- the rest of Arsenii & Eliana's
+    # history (2023-07-06, 2024-03-09) still correctly shows Instructor-
+    # style via genuine hyphenated role codes ("mL-J1") elsewhere.
     same_day = dt.date(2023, 3, 18)
     df = pd.DataFrame(
         [
@@ -574,8 +616,8 @@ def test_split_history_by_category_promotes_same_day_amam_title_to_instructor_st
         ]
     )
     split = _split_history_by_category(df)
-    assert set(split.keys()) == {"Instructor-style"}
-    assert len(split["Instructor-style"]) == 6
+    assert set(split.keys()) == {"Competitive partners"}
+    assert len(split["Competitive partners"]) == 6
 
 
 def test_split_history_by_category_does_not_promote_amam_title_on_a_different_day():

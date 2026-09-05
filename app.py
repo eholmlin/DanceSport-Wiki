@@ -390,7 +390,11 @@ def _classify_titles(titles: list[str]) -> str:
     against the two people this whole marker scheme was originally built
     on: of Umario Diallo's and Arsenii Moroz's 260 combined-eligibility
     titles between them, 257 are unaffected (caught by rule 1's role code
-    instead) and only 3 of Arsenii's flip to Competitive.
+    instead) and only 3 of Arsenii's flip to Competitive. The abbreviated
+    word-marker search also normalizes "_" to a space first, since NDCA
+    sometimes joins words with an underscore instead ("US National PA_MA
+    TB_PT CL. Championships...", 60 titles database-wide) -- "_" counts as
+    a word character in regex, so \bMA\b never matched "PA_MA" as written.
 
     3. Otherwise (no role code, no exclusively-Pro-Am/Mixed-Am marker) --
     fall through to two more signals, in order:
@@ -410,7 +414,15 @@ def _classify_titles(titles: list[str]) -> str:
        generalize to every unmarked partnership -- Umario Diallo's own
        unmarked partnerships are mostly *not* single-dance-heavy despite
        him being a confirmed professional, so those fall through to the
-       final default instead.
+       final default instead. This is a whole-partnership aggregate ("every
+       title"), and only fires when more than one title is passed in --
+       every real call site (_split_history_by_category, the Heat Lists
+       "Category" column) passes a single-element list, where "every title"
+       would otherwise degenerate to "is this one title single-dance", a
+       much weaker per-event signal that wrongly caught youth divisions
+       scored dance-by-dance regardless of Pro-Am status (real case: Dmitry
+       Dragunov & Michelle Bogomolny's "AC-PT"/"AC-TB" results, some titled
+       "Amateur ... Single Dance" outright).
 
     4. Final default: a real multi-dance/scholarship/championship title
     exists but never carries any marker -- per user direction, assumed
@@ -467,15 +479,44 @@ def _classify_titles(titles: list[str]) -> str:
         for t in lowered
     ):
         return "Instructor-style"
+    # "_" is swapped for a space before this search only -- NDCA's own
+    # abbreviated combined-eligibility titles sometimes join words with an
+    # underscore instead of a space or hyphen (e.g. "US National PA_MA
+    # TB_PT CL. Championships..."), and "_" counts as a word character in
+    # regex, so \bMA\b never matched "PA_MA" as written. Real case that
+    # surfaced this: Eric Groysman & Ella Li's "US National PA_MA TB_PT
+    # CL. Championships..." heat at United States Dance Championships
+    # showed as Competitive on the Heat Lists page while every other heat
+    # for that same partnership (all carrying an explicit "L-P1" role
+    # code) showed Instructor-style -- the Heat Lists view has no same-day
+    # override like the dancer-search split does, so this one just sat
+    # wrong with no way to self-correct. 60 titles database-wide match this
+    # exact "US National PA_MA ..." pattern, none also list AmAm.
     if any(
-        _INSTRUCTOR_WORD_MARKER.search(title)
+        _INSTRUCTOR_WORD_MARKER.search(title.replace("_", " "))
         and not any(am_marker in t for am_marker in _AMATEUR_TITLE_MARKERS)
         for title, t in zip(titles, lowered)
     ):
         return "Instructor-style"
     if any(marker in t for t in lowered for marker in _AMATEUR_TITLE_MARKERS):
         return "Competitive partners"
-    if all("single dance" in t for t in lowered):
+    # Guarded to more than one title: this was designed and validated as a
+    # whole-partnership aggregate ("every title this partnership ever
+    # competed under is single-dance format"), but every real call site in
+    # this app passes a single-element list (see _split_history_by_category
+    # and the Heat Lists "Category" column), where "all titles" trivially
+    # degenerates to "is this one title single-dance" -- a much weaker
+    # signal, since plenty of competitions run youth divisions dance-by-
+    # dance regardless of Pro-Am status. Real case: Dmitry Dragunov &
+    # Michelle Bogomolny's "AC-PT"/"AC-TB" youth single-dance results (some
+    # titled "Amateur ... Single Dance" outright) were getting bucketed as
+    # Instructor-style purely for being scored one dance at a time, despite
+    # a multi-year AM/AM-only Championship history including a U.S.
+    # National title with the same partner. Guarding on len(titles) > 1
+    # keeps the rule available for its originally-validated use (Arsenii
+    # Moroz's 4 confirmed instructor partnerships were 100% single-dance
+    # each) without it firing on any real per-row classification.
+    if len(titles) > 1 and all("single dance" in t for t in lowered):
         return "Instructor-style"
     return "Competitive partners"
 
