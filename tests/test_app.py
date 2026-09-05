@@ -620,6 +620,29 @@ def test_split_history_by_category_no_longer_promotes_via_removed_single_dance_s
     assert len(split["Competitive partners"]) == 6
 
 
+def test_split_history_by_category_manual_override_forces_instructor_style():
+    # Same data as the test above (Arsenii Moroz & Eliana Rose Ben Dov, The
+    # Royal Ball 2023-03-18), but passed with the real partnership_id
+    # (25830) -- three different general fixes for this were tried and
+    # rejected (see _MANUAL_INSTRUCTOR_STYLE_OVERRIDES' own docstring for
+    # why each one broke on a real counter-example elsewhere in the
+    # database), so this partnership -- and Arsenii Moroz & Ulyana
+    # Saladkova (24234), same underlying issue -- are handled by an
+    # explicit, individually-verified override instead. When the id is in
+    # the override set, every result is forced to Instructor-style
+    # regardless of title text.
+    same_day = dt.date(2023, 3, 18)
+    df = pd.DataFrame(
+        [
+            {"Date": same_day, "Event": "Youth Single Dance AC-mLJ2 Open Bronze Int'l Cha Cha"},
+            {"Date": same_day, "Event": "Youth Bronze 3-Dance Open J1 AM/AM Int'l Latin (CC,S,R)"},
+        ]
+    )
+    split = _split_history_by_category(df, partnership_id=25830)
+    assert set(split.keys()) == {"Instructor-style"}
+    assert len(split["Instructor-style"]) == 2
+
+
 def test_split_history_by_category_does_not_promote_amam_title_on_a_different_day():
     # The promotion in the test above is deliberately scoped to the SAME
     # competition date -- an AM/AM title on a day with no Instructor-style

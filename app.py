@@ -325,6 +325,28 @@ def partner_label(session, partnership: Partnership) -> str:
 
 _INSTRUCTOR_TITLE_MARKERS = ("pro am", "proam", "mxam", "mixed am", "pro-am", "pro/am")
 _AMATEUR_TITLE_MARKERS = ("am/am", "amam")
+# Manual, individually-verified exceptions to the title-based classification
+# below -- not a generalizable rule, a deliberate escape hatch for the rare
+# case where a partnership's title text is genuinely ambiguous (an
+# unhyphenated role code -- see _ROLE_DIVISION_CODE's docstring) but the
+# partnership is independently, heavily confirmed as Instructor-style by the
+# rest of its own history. Three different general fixes were tried and
+# rejected for these two specific partnerships before resorting to this:
+# extending _ROLE_DIVISION_CODE to match unhyphenated codes broke on a real
+# "Amateur ... AC-mLP1" title elsewhere (Philadelphia Dancesport
+# Championships); scoping to this exact competition+date broke on another
+# real partnership at that same event with no corroborating evidence either
+# way; and cross-referencing the same leader's other partnerships for
+# corroborating Pro-Am evidence broke on Lev Libkind, who has an identical
+# "confirmed prolific instructor" profile (24 partnerships, 346 of 579
+# titles independently Instructor-style) yet has his own explicitly
+# "Amateur"-labeled title using the same unhyphenated code shape. Keyed by
+# partnership id, not scoped to a date, since both partnerships' entire
+# recorded history (as of 2026-09) is consistent with Instructor-style.
+_MANUAL_INSTRUCTOR_STYLE_OVERRIDES = {
+    25830,  # Arsenii Moroz & Eliana Rose Ben Dov
+    24234,  # Arsenii Moroz & Ulyana Saladkova
+}
 # NDCA's own abbreviations for Pro-Am and Mixed-Am, e.g. "PA AA MA
 # 10-Dance..." or "AC-MLP1 MA-Full Bronze Int. Cha Cha" -- the short form
 # of the same combined-eligibility titles ("ProAm, Mixed Am, AmAm ...")
@@ -526,7 +548,7 @@ def _has_amateur_marker(title: str) -> bool:
     return any(marker in tl for marker in _AMATEUR_TITLE_MARKERS)
 
 
-def _split_history_by_category(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
+def _split_history_by_category(df: pd.DataFrame, partnership_id: int | None = None) -> dict[str, pd.DataFrame]:
     """Split one partnership's result history by each individual result's
     own event title, rather than classifying the whole partnership at
     once. A partnership can genuinely change category over time -- real
@@ -548,21 +570,30 @@ def _split_history_by_category(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     One more pass after the per-title classification: an AM/AM-marked
     title that shares a competition date with an Instructor-style
     sibling for this same partnership gets promoted to Instructor-style
-    too. Real case: Arsenii Moroz & Eliana Rose Ben Dov's "Youth Bronze
-    3-Dance Open J1 AM/AM Int'l Latin (CC,S,R)" landed on the same date
-    (2023-03-18, The Royal Ball) as 5 Pro-Am "Youth Single Dance ...
-    Int'l <dance>" titles covering those exact same 3 dances (Cha Cha,
-    Samba, Rumba) plus 2 more -- a combined placement derived from
-    dances already scored individually as Pro-Am, where NDCA's own title
-    for the combined round just doesn't repeat the eligibility wording
-    the individual dances carry. Deliberately scoped to the SAME
-    competition date (not "ever," like the marker checks in
-    _classify_titles) so it can't mask a partnership that genuinely
+    too -- NDCA's own combined-round title sometimes doesn't repeat the
+    eligibility wording its individual same-day dances carried. Deliberately
+    scoped to the SAME competition date (not "ever," like the marker checks
+    in _classify_titles) so it can't mask a partnership that genuinely
     changed category between different competitions, e.g. Yegor & Izzy
     above -- a same-day mixture is NDCA's own labeling inconsistency for
-    one round, not evidence of a real category change."""
+    one round, not evidence of a real category change.
+
+    Last pass: partnership_id is checked against
+    _MANUAL_INSTRUCTOR_STYLE_OVERRIDES and, if present, every result is
+    forced to Instructor-style regardless of title text -- see that
+    constant's own docstring for the two partnerships this covers and why
+    no general rule works for them instead (real case that motivated it:
+    Arsenii Moroz & Eliana Rose Ben Dov's "Youth Bronze 3-Dance Open J1
+    AM/AM Int'l Latin (CC,S,R)", The Royal Ball 2023-03-18, used to get
+    promoted by the same-day mechanism above via 5 "Youth Single Dance"
+    siblings -- but those siblings stopped self-classifying as
+    Instructor-style once the per-row single-dance rule was removed, and
+    their unhyphenated role code doesn't match _ROLE_DIVISION_CODE either,
+    so nothing triggers the promotion for them anymore)."""
     if df.empty:
         return {"Other partnerships": df}
+    if partnership_id in _MANUAL_INSTRUCTOR_STYLE_OVERRIDES:
+        return {"Instructor-style": df}
     categories = df["Event"].map(lambda title: _classify_titles([title]))
     instructor_dates = set(df.loc[categories == "Instructor-style", "Date"])
     override = (
@@ -1496,7 +1527,9 @@ def dancer_search(session, *, linked_person_id: int | None = None) -> None:
     # than one category is actually present.
     categorized: dict[str, list] = {}
     for partnership in partnerships:
-        for category, sub_df in _split_history_by_category(histories_by_id[partnership.id]).items():
+        for category, sub_df in _split_history_by_category(
+            histories_by_id[partnership.id], partnership_id=partnership.id
+        ).items():
             categorized.setdefault(category, []).append((partnership, sub_df))
 
     category_order = [
