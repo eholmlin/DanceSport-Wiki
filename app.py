@@ -187,19 +187,28 @@ def marks_totals_for_entries_in_round(session, entry_round_ids: set[tuple[int, i
 _VIEW_LINK_COLUMN_CONFIG = {"View": st.column_config.LinkColumn("View", display_text="Open ->")}
 
 # The inverse direction: the Competition page's per-event results table
-# (see _field_results_for_comp_events) carries "Leader"/"Follower" columns
-# of relative "?person_id=..." URLs -- one dancer's own name is already
-# shown in "Couple", so the link text stays generic rather than repeating
-# it.
-_PARTNER_LINK_COLUMN_CONFIG = {
-    "Leader": st.column_config.LinkColumn("Leader", display_text="View ->"),
-    "Follower": st.column_config.LinkColumn("Follower", display_text="View ->"),
-}
+# (see _field_results_for_comp_events) carries a "Partner" column of
+# relative "?person_id=..." URLs -- one dancer's own name is already
+# shown in "Couple", so the link text stays generic rather than naming a
+# dance role. A single link per row (not one per person): it's one
+# partnership either way, and landing on either person's own page shows
+# this same partnership among their results, so there's no need to pick
+# which side of the couple to link -- was "Leader"/"Follower" (two
+# columns) until user feedback that dance-role wording didn't fit here.
+_PARTNER_LINK_COLUMN_CONFIG = {"Partner": st.column_config.LinkColumn("Partner", display_text="View ->")}
 
 # The Heat Lists page's own "View event" column (see heat_list_for_
 # competition) -- a relative "?heat_competition_id=...&heat_event_id=..."
 # URL back into this same page, re-filtered to that event's whole field.
 _HEAT_EVENT_LINK_COLUMN_CONFIG = {"View event": st.column_config.LinkColumn("View event", display_text="View ->")}
+
+# Heat Lists rows carry both cross-links: "View event" (this same page,
+# re-filtered) and "Partner" (out to the Dancer page, see
+# _PARTNER_LINK_COLUMN_CONFIG). Passing a key for a column that isn't
+# actually present (e.g. "View event" on the single-event view, which
+# drops that column as self-referential) is harmless -- st.dataframe
+# just ignores config for columns it isn't given.
+_HEAT_LIST_LINK_COLUMN_CONFIG = {**_HEAT_EVENT_LINK_COLUMN_CONFIG, **_PARTNER_LINK_COLUMN_CONFIG}
 
 
 @st.cache_data(ttl=600)
@@ -653,16 +662,22 @@ def competitions_with_heatlists(session, term: str | None = None, limit: int = 2
 
 @st.cache_data(ttl=600)
 def heat_list_for_competition(_session, db_identity: str, competition_id: int) -> pd.DataFrame:
-    """Every scheduled_heat row for one competition, partner names and a
-    "View event" link joined in via one batched query. The link is a
-    relative "?heat_competition_id=...&heat_event_id=..." URL back into
-    this same page (see main()'s linked_heat_* handling and
-    heat_list_search) -- clicking it re-filters to every couple entered
-    in that exact event (same source_event_id, every round), the "who
-    else is in this division with me" view. Cached (see search_people's
-    docstring for why this is safe) since a competition's heat list can
-    run into the thousands of rows and gets reloaded every time a filter
-    widget below changes."""
+    """Every scheduled_heat row for one competition, partner names and two
+    cross-links joined in via one batched query:
+
+    - "View event": a relative "?heat_competition_id=...&heat_event_id=..."
+      URL back into this same page (see main()'s linked_heat_* handling
+      and heat_list_search) -- clicking it re-filters to every couple
+      entered in that exact event (same source_event_id, every round),
+      the "who else is in this division with me" view.
+    - "Partner": a relative "?person_id=..." URL out to that couple's own
+      Dancer page (see _PARTNER_LINK_COLUMN_CONFIG), so their results at
+      other competitions are one click away instead of a fresh name
+      search.
+
+    Cached (see search_people's docstring for why this is safe) since a
+    competition's heat list can run into the thousands of rows and gets
+    reloaded every time a filter widget below changes."""
     rows = _session.execute(
         select(ScheduledHeat, Partnership)
         .join(Partnership, ScheduledHeat.partnership_id == Partnership.id)
@@ -690,6 +705,16 @@ def heat_list_for_competition(_session, db_identity: str, competition_id: int) -
                 "Day": t.strftime("%A") if t else None,
                 "Time": t.strftime("%I:%M %p").lstrip("0") if t else None,
                 "Couple": " & ".join(parts) if parts else "(solo)",
+                # Same "?person_id=..." cross-link the Competition page's
+                # results table uses (see _PARTNER_LINK_COLUMN_CONFIG) --
+                # jumps straight to that dancer's own page and every other
+                # competition they've danced at, not just this one heat
+                # list. Real request: browsing a heat list and wanting a
+                # given couple's prior results elsewhere, with no way to
+                # get there short of re-searching their name from scratch.
+                "Partner": f"?person_id={partnership.leader_id if partnership.leader_id is not None else partnership.follower_id}"
+                if partnership.leader_id is not None or partnership.follower_id is not None
+                else None,
                 "Event": heat.event_name,
                 # scheduled_heat has no style column of its own (unlike
                 # comp_event, which only exists once results are loaded)
@@ -834,14 +859,16 @@ def _field_results_for_comp_events(session, comp_event_ids: list[int]) -> dict[i
                     "Placement": row.placement,
                     "Field size": row.field_size,
                     "Start #": row.competitor_no,
-                    # Relative URLs, same convention as result_histories_for_
+                    # Relative URL, same convention as result_histories_for_
                     # partnerships' "View" column -- read back by main() via
                     # st.query_params to jump straight to that person's
-                    # dancer page. None (not "") for a solo entry's missing
-                    # follower, so the cell renders empty rather than a
-                    # link to nowhere.
-                    "Leader": f"?person_id={row.leader_id}" if row.leader_id is not None else None,
-                    "Follower": f"?person_id={row.follower_id}" if row.follower_id is not None else None,
+                    # dancer page. Leader preferred, follower as fallback
+                    # (e.g. a solo entry has no follower); None only when
+                    # neither exists, so the cell renders empty rather than
+                    # a link to nowhere.
+                    "Partner": f"?person_id={row.leader_id if row.leader_id is not None else row.follower_id}"
+                    if row.leader_id is not None or row.follower_id is not None
+                    else None,
                     "_round_order": row.round_order,
                     "_marks_total": marks_totals.get((row.entry_id, row.round_id), 0) if row.round_id is not None else 0,
                     "_first_name": (row.couple.split(" & ")[0].split() or [""])[0],
@@ -1420,7 +1447,10 @@ def heat_list_search(session, *, linked_competition_id: int | None = None, linke
         # the table is already scoped to this one event, same reasoning
         # as dropping the self-referential "View event" link.
         event_cols = [c for c in display_cols if c not in ("View event", "Event")]
-        st.dataframe(filtered, use_container_width=True, hide_index=True, column_order=event_cols)
+        st.dataframe(
+            filtered, use_container_width=True, hide_index=True, column_order=event_cols,
+            column_config=_HEAT_LIST_LINK_COLUMN_CONFIG,
+        )
         return
 
     # Otherwise, grouped by partnership (one expander per couple, each
@@ -1438,7 +1468,7 @@ def heat_list_search(session, *, linked_competition_id: int | None = None, linke
         st.caption(f"{len(partnership_ids)} different partnerships match -- narrow by dancer name to group by couple.")
         st.dataframe(
             filtered, use_container_width=True, hide_index=True, column_order=display_cols,
-            column_config=_HEAT_EVENT_LINK_COLUMN_CONFIG,
+            column_config=_HEAT_LIST_LINK_COLUMN_CONFIG,
         )
         return
 
@@ -1453,12 +1483,12 @@ def heat_list_search(session, *, linked_competition_id: int | None = None, linke
         with st.expander(f"{couple} -- {len(group)} heats", expanded=False):
             st.dataframe(
                 group, use_container_width=True, hide_index=True, column_order=display_cols,
-                column_config=_HEAT_EVENT_LINK_COLUMN_CONFIG,
+                column_config=_HEAT_LIST_LINK_COLUMN_CONFIG,
             )
 
 
 def dancer_search(session, *, linked_person_id: int | None = None) -> None:
-    """linked_person_id comes from a "Leader"/"Follower" link column on the
+    """linked_person_id comes from a "Partner" link column on the
     Competition page (see main() and _field_results_for_comp_events) --
     when set and the search box is still empty (a fresh arrival via that
     link, not a manual search), it skips straight to that person instead
@@ -1572,7 +1602,7 @@ def main() -> None:
     session = _session()
     st.title("DanceSport Wiki")
 
-    # A "View"/"Leader"/"Follower"/"View event" link clicked on any page
+    # A "View"/"Partner"/"View event" link clicked on any page
     # (opens a new tab, so this is a fresh session -- see
     # result_histories_for_partnerships, _field_results_for_comp_events,
     # and heat_list_for_competition) lands here with one of these pairs

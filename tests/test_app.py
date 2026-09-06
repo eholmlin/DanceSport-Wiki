@@ -296,12 +296,15 @@ def test_not_recalled_couples_show_overall_rank_and_marks_count(tmp_path):
     assert rows.loc["Eve & Frank", "Placement"] == "3rd (1 mark)"
 
 
-def test_results_for_comp_event_leader_follower_links_point_to_the_right_person(tmp_path):
+def test_results_for_comp_event_partner_link_points_to_the_right_person(tmp_path):
     # The inverse of the dancer page's "View" link: each row in a
-    # competition's results table carries "Leader"/"Follower" columns
-    # linking back to that exact person's dancer page (see main()'s
-    # linked_person_id). A solo entry has no follower at all -- that cell
-    # must be None (no link), not a link to a nonexistent person.
+    # competition's results table carries a "Partner" column linking back
+    # to that couple's dancer page (see main()'s linked_person_id) --
+    # leader preferred, follower as fallback (was two separate "Leader"/
+    # "Follower" columns until user feedback that dance-role wording
+    # didn't fit; landing on either person's page shows the same
+    # partnership either way, so one link suffices). A solo entry has no
+    # follower at all, so it falls back to the leader (the soloist).
     engine = init_db(tmp_path / "partner_links.sqlite3")
     session = get_session(engine)
 
@@ -341,10 +344,8 @@ def test_results_for_comp_event_leader_follower_links_point_to_the_right_person(
     df = results_for_comp_event(session, event.id)
     rows = df.set_index("Couple")
 
-    assert rows.loc["Alice & Bob", "Leader"] == f"?person_id={leader.id}"
-    assert rows.loc["Alice & Bob", "Follower"] == f"?person_id={follower.id}"
-    assert rows.loc["Cara", "Leader"] == f"?person_id={soloist.id}"
-    assert rows.loc["Cara", "Follower"] is None
+    assert rows.loc["Alice & Bob", "Partner"] == f"?person_id={leader.id}"
+    assert rows.loc["Cara", "Partner"] == f"?person_id={soloist.id}"
 
 
 def test_best_results_excludes_not_recalled_rank_and_marks_format():
