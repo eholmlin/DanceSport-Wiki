@@ -1545,19 +1545,9 @@ def dancer_search(
         choice = st.selectbox("Multiple matches -- pick one:", list(options.keys()))
         person = options[choice]
 
-    st.header(person.display_name)
-    # Country is only ever known for WDSF-sourced people (NDCA doesn't
-    # capture it) -- shown when we actually have it, hidden rather than a
-    # placeholder "unknown" otherwise, per user request.
-    metrics = [("Role", "Adjudicator" if person.is_adjudicator else "Competitor")]
-    if person.country:
-        metrics.insert(0, ("Country", person.country))
-    cols = st.columns(len(metrics))
-    for col, (label, value) in zip(cols, metrics):
-        col.metric(label, value)
-
     partnerships = partnerships_for_person(session, db_identity, person.id)
     if not partnerships:
+        st.header(person.display_name)
         st.warning("No partnerships/entries on file for this person yet.")
         return
 
@@ -1567,13 +1557,30 @@ def dancer_search(
     # showing every partnership if the id doesn't match any of this
     # person's own (stale link, e.g. a merged/renamed partnership) rather
     # than silently showing nothing.
+    narrowed_to_one = False
     if not term and linked_partnership_id is not None:
         narrowed = [p for p in partnerships if p.id == linked_partnership_id]
         if narrowed:
             partnerships = narrowed
+            narrowed_to_one = True
             if st.button("Show every partnership"):
                 st.query_params.pop("partnership_id", None)
                 st.rerun()
+
+    # Both names when narrowed to one partnership -- real feedback: the
+    # header showed only the person clicked through from, not the couple
+    # this narrowed view is actually about, on a page whose whole point is
+    # one specific partnership rather than one specific person.
+    st.header(partner_label(session, partnerships[0]) if narrowed_to_one else person.display_name)
+    # Country is only ever known for WDSF-sourced people (NDCA doesn't
+    # capture it) -- shown when we actually have it, hidden rather than a
+    # placeholder "unknown" otherwise, per user request.
+    metrics = [("Role", "Adjudicator" if person.is_adjudicator else "Competitor")]
+    if person.country:
+        metrics.insert(0, ("Country", person.country))
+    cols = st.columns(len(metrics))
+    for col, (label, value) in zip(cols, metrics):
+        col.metric(label, value)
 
     # Each partnership's results are pulled in one batched query
     # (result_histories_for_partnerships), not one query per partnership
