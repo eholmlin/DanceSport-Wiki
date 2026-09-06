@@ -705,14 +705,22 @@ def heat_list_for_competition(_session, db_identity: str, competition_id: int) -
                 "Day": t.strftime("%A") if t else None,
                 "Time": t.strftime("%I:%M %p").lstrip("0") if t else None,
                 "Couple": " & ".join(parts) if parts else "(solo)",
-                # Same "?person_id=..." cross-link the Competition page's
-                # results table uses (see _PARTNER_LINK_COLUMN_CONFIG) --
-                # jumps straight to that dancer's own page and every other
-                # competition they've danced at, not just this one heat
-                # list. Real request: browsing a heat list and wanting a
-                # given couple's prior results elsewhere, with no way to
-                # get there short of re-searching their name from scratch.
-                "Partner": f"?person_id={partnership.leader_id if partnership.leader_id is not None else partnership.follower_id}"
+                # Same "?person_id=...&partnership_id=..." cross-link the
+                # Competition page's results table uses (see
+                # _PARTNER_LINK_COLUMN_CONFIG) -- jumps straight to that
+                # exact couple's own results across every competition,
+                # not just this one heat list. partnership_id narrows
+                # dancer_search to just this partnership (see its own
+                # docstring) rather than landing on every partnership
+                # this person has ever had. Real request: browsing a heat
+                # list and wanting a given couple's prior results
+                # elsewhere, with no way to get there short of
+                # re-searching their name from scratch and hunting for
+                # the right partner among however many they've had.
+                "Partner": (
+                    f"?person_id={partnership.leader_id if partnership.leader_id is not None else partnership.follower_id}"
+                    f"&partnership_id={partnership.id}"
+                )
                 if partnership.leader_id is not None or partnership.follower_id is not None
                 else None,
                 "Event": heat.event_name,
@@ -779,6 +787,7 @@ class _PrelimRow(NamedTuple):
     entry_id: int
     leader_id: Optional[int]
     follower_id: Optional[int]
+    partnership_id: int
 
 
 def _field_results_for_comp_events(session, comp_event_ids: list[int]) -> dict[int, pd.DataFrame]:
@@ -835,6 +844,7 @@ def _field_results_for_comp_events(session, comp_event_ids: list[int]) -> dict[i
                 entry_id=entry.id,
                 leader_id=partnership.leader_id,
                 follower_id=partnership.follower_id,
+                partnership_id=partnership.id,
             )
         )
 
@@ -862,11 +872,15 @@ def _field_results_for_comp_events(session, comp_event_ids: list[int]) -> dict[i
                     # Relative URL, same convention as result_histories_for_
                     # partnerships' "View" column -- read back by main() via
                     # st.query_params to jump straight to that person's
-                    # dancer page. Leader preferred, follower as fallback
-                    # (e.g. a solo entry has no follower); None only when
-                    # neither exists, so the cell renders empty rather than
-                    # a link to nowhere.
-                    "Partner": f"?person_id={row.leader_id if row.leader_id is not None else row.follower_id}"
+                    # dancer page, narrowed to just this partnership (see
+                    # dancer_search's linked_partnership_id). Leader
+                    # preferred, follower as fallback (e.g. a solo entry
+                    # has no follower); None only when neither exists, so
+                    # the cell renders empty rather than a link to nowhere.
+                    "Partner": (
+                        f"?person_id={row.leader_id if row.leader_id is not None else row.follower_id}"
+                        f"&partnership_id={row.partnership_id}"
+                    )
                     if row.leader_id is not None or row.follower_id is not None
                     else None,
                     "_round_order": row.round_order,
@@ -1487,13 +1501,26 @@ def heat_list_search(session, *, linked_competition_id: int | None = None, linke
             )
 
 
-def dancer_search(session, *, linked_person_id: int | None = None) -> None:
+def dancer_search(
+    session, *, linked_person_id: int | None = None, linked_partnership_id: int | None = None
+) -> None:
     """linked_person_id comes from a "Partner" link column on the
-    Competition page (see main() and _field_results_for_comp_events) --
-    when set and the search box is still empty (a fresh arrival via that
-    link, not a manual search), it skips straight to that person instead
-    of requiring a name search. Same "manual search always wins" rule as
-    competition_search's linked_competition_id/linked_event_id."""
+    Competition page or Heat Lists (see main(), _field_results_for_comp_events,
+    and heat_list_for_competition) -- when set and the search box is still
+    empty (a fresh arrival via that link, not a manual search), it skips
+    straight to that person instead of requiring a name search. Same
+    "manual search always wins" rule as competition_search's
+    linked_competition_id/linked_event_id.
+
+    linked_partnership_id (same link, carried alongside linked_person_id)
+    narrows the page further to just that one partnership instead of
+    every partnership this person has ever had -- real request: clicking
+    through from a specific couple's heat wants that couple's own
+    history, not a search through everyone this person has ever danced
+    with to find them again. Same "manual search always wins" rule, plus
+    its own "show every partnership" button to drop just this narrower
+    lock (see the "Show full competition schedule" button on Heat Lists
+    for the same pattern)."""
     db_identity = _db_identity(session)
     term = st.text_input("Search for a dancer by name", "", key="dancer_search_term")
     if not term:
@@ -1533,6 +1560,20 @@ def dancer_search(session, *, linked_person_id: int | None = None) -> None:
     if not partnerships:
         st.warning("No partnerships/entries on file for this person yet.")
         return
+
+    # Narrow to just the linked partnership on a fresh arrival via link
+    # (manual search box use, or a prior "Show every partnership" click,
+    # always wins -- same rule as linked_person_id above). Falls back to
+    # showing every partnership if the id doesn't match any of this
+    # person's own (stale link, e.g. a merged/renamed partnership) rather
+    # than silently showing nothing.
+    if not term and linked_partnership_id is not None:
+        narrowed = [p for p in partnerships if p.id == linked_partnership_id]
+        if narrowed:
+            partnerships = narrowed
+            if st.button("Show every partnership"):
+                st.query_params.pop("partnership_id", None)
+                st.rerun()
 
     # Each partnership's results are pulled in one batched query
     # (result_histories_for_partnerships), not one query per partnership
@@ -1611,6 +1652,7 @@ def main() -> None:
     linked_competition_id = st.query_params.get("competition_id")
     linked_event_id = st.query_params.get("event_id")
     linked_person_id = st.query_params.get("person_id")
+    linked_partnership_id = st.query_params.get("partnership_id")
     linked_heat_competition_id = st.query_params.get("heat_competition_id")
     linked_heat_event_id = st.query_params.get("heat_event_id")
 
@@ -1633,7 +1675,11 @@ def main() -> None:
         default_mode_index = 0
     mode = st.radio("Search by", mode_options, horizontal=True, index=default_mode_index)
     if mode == "Dancer":
-        dancer_search(session, linked_person_id=int(linked_person_id) if linked_person_id else None)
+        dancer_search(
+            session,
+            linked_person_id=int(linked_person_id) if linked_person_id else None,
+            linked_partnership_id=int(linked_partnership_id) if linked_partnership_id else None,
+        )
     elif mode == "Competition":
         competition_search(
             session,

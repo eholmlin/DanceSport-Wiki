@@ -299,10 +299,11 @@ def test_not_recalled_couples_show_overall_rank_and_marks_count(tmp_path):
 def test_results_for_comp_event_partner_link_points_to_the_right_person(tmp_path):
     # The inverse of the dancer page's "View" link: each row in a
     # competition's results table carries a "Partner" column linking back
-    # to that couple's dancer page (see main()'s linked_person_id) --
-    # leader preferred, follower as fallback (was two separate "Leader"/
-    # "Follower" columns until user feedback that dance-role wording
-    # didn't fit; landing on either person's page shows the same
+    # to that couple's dancer page, narrowed to just this partnership (see
+    # main()'s linked_person_id/linked_partnership_id and dancer_search)
+    # -- leader preferred, follower as fallback (was two separate
+    # "Leader"/"Follower" columns until user feedback that dance-role
+    # wording didn't fit; landing on either person's page shows the same
     # partnership either way, so one link suffices). A solo entry has no
     # follower at all, so it falls back to the leader (the soloist).
     engine = init_db(tmp_path / "partner_links.sqlite3")
@@ -344,8 +345,8 @@ def test_results_for_comp_event_partner_link_points_to_the_right_person(tmp_path
     df = results_for_comp_event(session, event.id)
     rows = df.set_index("Couple")
 
-    assert rows.loc["Alice & Bob", "Partner"] == f"?person_id={leader.id}"
-    assert rows.loc["Cara", "Partner"] == f"?person_id={soloist.id}"
+    assert rows.loc["Alice & Bob", "Partner"] == f"?person_id={leader.id}&partnership_id={partnership.id}"
+    assert rows.loc["Cara", "Partner"] == f"?person_id={soloist.id}&partnership_id={solo_partnership.id}"
 
 
 def test_best_results_excludes_not_recalled_rank_and_marks_format():
