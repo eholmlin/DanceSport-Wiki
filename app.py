@@ -6,10 +6,15 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+from io import BytesIO
 from typing import NamedTuple, Optional
 
 import pandas as pd
 import streamlit as st
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import landscape, letter
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlalchemy import func, or_, select
 
 from dsr.db import get_engine, get_session
@@ -660,6 +665,64 @@ def competitions_with_heatlists(session, term: str | None = None, limit: int = 2
     return list(session.scalars(stmt).all())
 
 
+# Every relative-URL cross-link column used anywhere in the app (see
+# _VIEW_LINK_COLUMN_CONFIG, _PARTNER_LINK_COLUMN_CONFIG,
+# _HEAT_EVENT_LINK_COLUMN_CONFIG below) -- a raw "?person_id=..." query
+# string is meaningless outside the app, so _table_pdf_bytes drops
+# whichever of these a given table happens to carry.
+_LINK_COLUMN_NAMES = {"View", "Partner", "View event"}
+
+
+def _table_pdf_bytes(df: pd.DataFrame, title: str) -> bytes:
+    """Render any of this app's tables as a landscape PDF, for printing or
+    sharing offline (e.g. at the venue, without a laptop)."""
+    cols = [c for c in df.columns if c not in _LINK_COLUMN_NAMES]
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=landscape(letter), leftMargin=24, rightMargin=24, topMargin=24, bottomMargin=24
+    )
+    data = [cols] + df[cols].astype(str).values.tolist()
+    table = Table(data, repeatRows=1)
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2c3e50")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTSIZE", (0, 0), (-1, -1), 7),
+                ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f2f2f2")]),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ]
+        )
+    )
+    doc.build([Paragraph(title, getSampleStyleSheet()["Heading2"]), Spacer(1, 8), table])
+    return buf.getvalue()
+
+
+def _download_buttons(df: pd.DataFrame, display_cols: list[str], file_stem: str, title: str, container=st) -> None:
+    """CSV + PDF download buttons for the same table, side by side. Used
+    everywhere a table on this page is worth exporting whole, in place of
+    (or alongside) st.dataframe's own per-table "Download as CSV" toolbar
+    button, which has no PDF equivalent and can't export a filtered view
+    that spans several separately-rendered tables (see heat_list_search)."""
+    file_stem = file_stem.replace("/", "-")
+    cols = container.columns(2)
+    cols[0].download_button(
+        "Download as CSV",
+        df[display_cols].to_csv(index=False).encode("utf-8"),
+        file_name=f"{file_stem}.csv",
+        mime="text/csv",
+        key=f"csv_{file_stem}",
+    )
+    cols[1].download_button(
+        "Download as PDF",
+        _table_pdf_bytes(df[display_cols], title),
+        file_name=f"{file_stem}.pdf",
+        mime="application/pdf",
+        key=f"pdf_{file_stem}",
+    )
+
+
 @st.cache_data(ttl=600)
 def heat_list_for_competition(_session, db_identity: str, competition_id: int) -> pd.DataFrame:
     """Every scheduled_heat row for one competition, partner names and two
@@ -1306,6 +1369,7 @@ def competition_search(session, *, linked_competition_id: int | None = None, lin
             column_order=display_cols,
             column_config=_PARTNER_LINK_COLUMN_CONFIG,
         )
+        _download_buttons(df, display_cols, f"{competition.name} - {event.raw_title} results", event.raw_title)
 
         st.subheader("Judges' marks")
         couple_options = dict(zip(df["Couple"], df["_entry_id"]))
@@ -1334,6 +1398,12 @@ def competition_search(session, *, linked_competition_id: int | None = None, lin
                 detail_df = marks_detail_with_totals(marks_df)
                 detail_cols = [c for c in detail_df.columns if not c.startswith("_")]
                 st.dataframe(detail_df, use_container_width=True, hide_index=True, column_order=detail_cols)
+                _download_buttons(
+                    detail_df,
+                    detail_cols,
+                    f"{competition.name} - {event.raw_title} - {couple_choice} marks",
+                    f"{event.raw_title} -- {couple_choice}",
+                )
 
 
 def heat_list_search(session, *, linked_competition_id: int | None = None, linked_event_id: str | None = None) -> None:
@@ -1445,6 +1515,13 @@ def heat_list_search(session, *, linked_competition_id: int | None = None, linke
         return
 
     display_cols = [c for c in df.columns if not c.startswith("_")]
+
+    # Whole-filtered-set download, ahead of the render branches below --
+    # the grouped-by-partnership view (see below) otherwise only offers
+    # Streamlit's own per-table "Download as CSV" toolbar button one
+    # expander at a time, with no way to get the whole filtered schedule
+    # in one file.
+    _download_buttons(filtered, display_cols, f"{competition.name} heat list", f"{competition.name} -- Heat List")
 
     # A single event (every remaining row shares one source_event_id --
     # true right after a "View event" link, and also whenever a manual
@@ -1637,6 +1714,7 @@ def dancer_search(
                     continue
 
                 st.dataframe(df, use_container_width=True, hide_index=True, column_config=_VIEW_LINK_COLUMN_CONFIG)
+                _download_buttons(df, list(df.columns), f"{label} results", label)
 
                 best = best_results(df)
                 if not best.empty:
