@@ -1,9 +1,9 @@
 import datetime as dt
 
 from dsr.db import get_session, init_db
-from dsr.load.heatlist import load_scheduled_heat
+from dsr.load.heatlist import drop_finished_competitions_with_results, load_scheduled_heat
 from dsr.load.wdsf import load_competition
-from dsr.models import Partnership, Person, PersonAlias, ScheduledHeat
+from dsr.models import CompEvent, Entry, Partnership, Person, PersonAlias, Result, ScheduledHeat
 from dsr.parse.staging import StagingCompetition, StagingPersonRef, StagingScheduledHeat
 
 
@@ -127,3 +127,59 @@ def test_load_scheduled_heat_handles_a_solo_entry(tmp_path):
     partnership = session.get(Partnership, row.partnership_id)
     assert partnership.kind == "solo"
     assert partnership.follower_id is None
+
+
+def _add_result(session, competition, entry_partnership_id):
+    comp_event = CompEvent(competition_id=competition.id, raw_title="Some Event")
+    session.add(comp_event)
+    session.flush()
+    entry = Entry(competition_id=competition.id, partnership_id=entry_partnership_id)
+    session.add(entry)
+    session.flush()
+    session.add(Result(comp_event_id=comp_event.id, entry_id=entry.id, placement_low=1, placement_high=1))
+    session.commit()
+
+
+def test_drop_finished_competitions_with_results_drops_a_finished_loaded_competition(tmp_path):
+    engine = init_db(tmp_path / "heatlist_drop.sqlite3")
+    session = get_session(engine)
+    competition = _competition(session)  # ends 2026-09-06
+    row = load_scheduled_heat(session, "ndca_premier", competition, _staged(partner_1="A", partner_2="B"))
+    session.commit()
+    _add_result(session, competition, row.partnership_id)
+
+    dropped = drop_finished_competitions_with_results(session, today=dt.date(2026, 9, 8))
+
+    assert dropped == [(competition.name, 1)]
+    assert session.query(ScheduledHeat).count() == 0
+
+
+def test_drop_finished_competitions_with_results_leaves_results_still_pending(tmp_path):
+    # A competition can finish days before its results actually load --
+    # dropping the heat list the moment it ends, before results are on
+    # file, would erase the only schedule data available in the meantime.
+    engine = init_db(tmp_path / "heatlist_no_drop_pending.sqlite3")
+    session = get_session(engine)
+    competition = _competition(session)  # ends 2026-09-06
+    load_scheduled_heat(session, "ndca_premier", competition, _staged(partner_1="A", partner_2="B"))
+    session.commit()
+
+    dropped = drop_finished_competitions_with_results(session, today=dt.date(2026, 9, 8))
+
+    assert dropped == []
+    assert session.query(ScheduledHeat).count() == 1
+
+
+def test_drop_finished_competitions_with_results_leaves_an_in_progress_competition(tmp_path):
+    engine = init_db(tmp_path / "heatlist_no_drop_in_progress.sqlite3")
+    session = get_session(engine)
+    competition = _competition(session)  # ends 2026-09-06
+    row = load_scheduled_heat(session, "ndca_premier", competition, _staged(partner_1="A", partner_2="B"))
+    session.commit()
+    _add_result(session, competition, row.partnership_id)
+
+    # today is still within the competition's own date range
+    dropped = drop_finished_competitions_with_results(session, today=dt.date(2026, 9, 4))
+
+    assert dropped == []
+    assert session.query(ScheduledHeat).count() == 1

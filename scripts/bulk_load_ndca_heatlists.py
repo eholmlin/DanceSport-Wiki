@@ -23,7 +23,7 @@ import datetime as dt
 from dsr.db import get_session
 from dsr.fetch.client import PoliteFetcher
 from dsr.fetch.storage import save_raw_document
-from dsr.load.heatlist import load_scheduled_heat
+from dsr.load.heatlist import drop_finished_competitions_with_results, load_scheduled_heat
 from dsr.load.wdsf import load_competition
 from dsr.parse.ndca import SOURCE, ParseError, parse_competition, parse_heatlist_attendee, parse_roster
 
@@ -146,6 +146,19 @@ def main() -> None:
     print(f"\nDone. Loaded {loaded}/{len(competitions)} competitions. {len(failures)} failed.")
     for cyi, name, msg in failures:
         print(f"  FAILED: {name} (cyi={cyi})\n    {msg}")
+
+    # A finished competition's heat list is superseded once its results are
+    # on file (usually the next day's run, sometimes later if results
+    # loading itself runs late) -- see drop_finished_competitions_with_results
+    # for why one without results yet is left alone regardless of how long
+    # ago it finished. Runs every refresh (not just once) since it's cheap
+    # and idempotent: a competition already dropped just won't show up in
+    # the scheduled_heat table to check again.
+    dropped = drop_finished_competitions_with_results(session)
+    if dropped:
+        print(f"\nDropped {len(dropped)} finished competition(s) with results now on file:")
+        for name, n in dropped:
+            print(f"  {name} -- {n} scheduled_heat rows removed")
 
 
 if __name__ == "__main__":

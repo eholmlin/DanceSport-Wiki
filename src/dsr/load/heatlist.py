@@ -7,10 +7,10 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from dsr.models import Competition, ScheduledHeat
+from dsr.models import CompEvent, Competition, Result, ScheduledHeat
 from dsr.parse.staging import StagingScheduledHeat
 from dsr.resolve.entities import resolve_partnership, resolve_partnership_either_order, resolve_person
 
@@ -70,3 +70,44 @@ def load_scheduled_heat(
     session.add(row)
     session.flush()
     return row
+
+
+def drop_finished_competitions_with_results(session: Session, *, today: dt.date | None = None) -> list[tuple[str, int]]:
+    """Deletes every ScheduledHeat row for a competition that's both
+    finished (end_date before today) and has results loaded (at least one
+    Result row) -- once real results are on file, the pre-competition heat
+    list is superseded and just clutters the Heat Lists page's competition
+    picker with events that are long over. Per user request.
+
+    A finished competition whose results *haven't* loaded yet is left
+    alone, however many days that takes past its end_date -- the heat
+    list is still the only schedule on file until then, so dropping it on
+    a fixed D+1 timer regardless of whether results actually showed up
+    would erase the only data available for a competition results are
+    just running late for.
+
+    Returns [(competition_name, rows_dropped), ...] for the caller to log."""
+    today = today or dt.date.today()
+    competition_ids = (
+        session.execute(select(ScheduledHeat.competition_id).distinct()).scalars().all()
+    )
+    if not competition_ids:
+        return []
+
+    dropped: list[tuple[str, int]] = []
+    for competition_id in competition_ids:
+        competition = session.get(Competition, competition_id)
+        if competition is None or competition.end_date is None or competition.end_date >= today:
+            continue
+        has_results = session.execute(
+            select(Result.entry_id)
+            .join(CompEvent, Result.comp_event_id == CompEvent.id)
+            .where(CompEvent.competition_id == competition_id)
+            .limit(1)
+        ).first()
+        if has_results is None:
+            continue
+        n = session.execute(delete(ScheduledHeat).where(ScheduledHeat.competition_id == competition_id)).rowcount
+        dropped.append((competition.name, n))
+    session.commit()
+    return dropped
