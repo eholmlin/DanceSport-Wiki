@@ -1791,19 +1791,23 @@ def competition_search(session, *, linked_competition_id: int | None = None, lin
                 if anchor is None:
                     st.info("Pick an anchor couple to compare.")
                 else:
+                    # No cap on how many -- per user request. The field-wide
+                    # tables/charts above already cover "every couple at
+                    # once"; this section's actual job is letting a couple
+                    # of specific rivals sit side by side, but there's no
+                    # technical reason to stop someone comparing more (the
+                    # table just grows a column, the chart just grows a bar,
+                    # same as the field-wide versions already do).
                     others = st.pills(
                         "Compare against",
                         [c for c in couple_choices if c != anchor],
                         selection_mode="multi",
                         key=f"compare_others_{event.id}",
                     )
-                    if len(others) > 2:
-                        st.warning("Only the first 2 picks below are used.")
-                        others = others[:2]
                     compare_choices = [anchor] + others
                 if not compare_choices or len(compare_choices) < 2:
                     if anchor is not None:
-                        st.info("Pick 1 or 2 couples to compare against the anchor.")
+                        st.info("Pick at least one couple to compare against the anchor.")
                 else:
                     # Transposed (couples as columns, metrics as rows) rather
                     # than the field-wide tables' own shape -- side by side is
