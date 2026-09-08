@@ -6,9 +6,11 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+from html import escape
 from io import BytesIO
 from typing import NamedTuple, Optional
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 from reportlab.lib import colors
@@ -673,6 +675,18 @@ def competitions_with_heatlists(session, term: str | None = None, limit: int = 2
 _LINK_COLUMN_NAMES = {"View", "Partner", "View event"}
 
 
+def _pdf_cell_str(value) -> str:
+    """Blank for a missing value -- None, float NaN, or pandas' own
+    nullable-Int64 pd.NA (e.g. a marks-pivot cell for a round a couple
+    never reached -- see _labeled_marks_pivot) -- rather than the literal
+    "None"/"nan"/"<NA>" str() would produce."""
+    if pd.isna(value):
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
 def _table_pdf_bytes(df: pd.DataFrame, title: str) -> bytes:
     """Render any of this app's tables as a landscape PDF, for printing or
     sharing offline (e.g. at the venue, without a laptop)."""
@@ -681,7 +695,7 @@ def _table_pdf_bytes(df: pd.DataFrame, title: str) -> bytes:
     doc = SimpleDocTemplate(
         buf, pagesize=landscape(letter), leftMargin=24, rightMargin=24, topMargin=24, bottomMargin=24
     )
-    data = [cols] + df[cols].astype(str).values.tolist()
+    data = [cols] + [[_pdf_cell_str(v) for v in row] for row in df[cols].itertuples(index=False, name=None)]
     table = Table(data, repeatRows=1)
     table.setStyle(
         TableStyle(
@@ -721,6 +735,36 @@ def _download_buttons(df: pd.DataFrame, display_cols: list[str], file_stem: str,
         mime="application/pdf",
         key=f"pdf_{file_stem}",
     )
+
+
+def _grouped_bar_chart(df: pd.DataFrame, value_cols: list[str]) -> None:
+    """Grouped vertical bar chart: one group per df.index value (couples,
+    in the dataframe's own row order), one colored bar per value_cols
+    entry within each group, in value_cols' own order.
+
+    Built directly with Altair rather than st.bar_chart: passing more
+    than one y-column to st.bar_chart re-sorts the color/legend series
+    alphabetically regardless of the dataframe's column order, even with
+    sort=False (which only controls the x-axis category order) -- e.g.
+    "Int'l Cha Cha, Int'l Jive, Int'l Rumba, Int'l Samba" instead of the
+    syllabus order "Cha Cha, Samba, Rumba, Jive" (see _DANCE_ORDER), or
+    "Quarter-Final, Round 1, Semi-Final" instead of chronological order.
+    Explicit `sort=` on both the x-axis and the color/xOffset encodings
+    below is what st.bar_chart can't be told to do."""
+    x_field = df.index.name or "index"
+    long_df = df.reset_index().melt(id_vars=[x_field], value_vars=value_cols, var_name="Series", value_name="Value")
+    chart = (
+        alt.Chart(long_df)
+        .mark_bar()
+        .encode(
+            x=alt.X(f"{x_field}:N", sort=df.index.tolist(), title=None),
+            y=alt.Y("Value:Q", title=None),
+            xOffset=alt.XOffset("Series:N", sort=value_cols),
+            color=alt.Color("Series:N", sort=value_cols, title=None),
+            tooltip=[x_field, "Series", "Value"],
+        )
+    )
+    st.altair_chart(chart, use_container_width=True)
 
 
 @st.cache_data(ttl=600)
@@ -821,6 +865,23 @@ def _person_names(session, person_ids: set[int]) -> dict[int, str]:
         return {}
     rows = session.execute(select(Person.id, Person.display_name).where(Person.id.in_(person_ids))).all()
     return {pid: name for pid, name in rows}
+
+
+def _format_date_range(start: dt.date, end: dt.date | None) -> str:
+    """Friendly "Sep 2-6, 2026" competition date range, in place of the
+    literal ISO dates strung together with a hyphen ("2026-09-02 -
+    2026-09-06") -- per user feedback that the ISO form was laborious to
+    read. Falls back to spelling out both full dates when the months or
+    years differ (e.g. "Sep 30 - Oct 2, 2026", "Dec 30, 2026 - Jan 2,
+    2027"). date.day is used directly (not %d) since it's already a plain
+    int with no leading zero to strip."""
+    if end is None or end == start:
+        return f"{start.strftime('%b')} {start.day}, {start.year}"
+    if start.year == end.year and start.month == end.month:
+        return f"{start.strftime('%b')} {start.day}-{end.day}, {start.year}"
+    if start.year == end.year:
+        return f"{start.strftime('%b')} {start.day} - {end.strftime('%b')} {end.day}, {start.year}"
+    return f"{start.strftime('%b')} {start.day}, {start.year} - {end.strftime('%b')} {end.day}, {end.year}"
 
 
 def _ordinal(n: int) -> str:
@@ -997,18 +1058,33 @@ def results_for_comp_event(session, comp_event_id: int) -> pd.DataFrame:
     return _field_results_for_comp_events(session, [comp_event_id])[comp_event_id]
 
 
-# Standard Latin syllabus order (matches the "CC,S,R,PD,J" abbreviations in
-# event titles), not alphabetical -- used to order dances in the marks
-# detail and routine-totals tables the way a dancer actually expects them.
-_LATIN_DANCE_ORDER = ["Cha Cha", "Samba", "Rumba", "Paso Doble", "Jive"]
+# Standard syllabus order for each style actually seen in this data (matches
+# the "W,T,VW,F,Q" / "CC,S,R,PD,J" abbreviations in event titles), not
+# alphabetical -- used to order dances in the marks detail and routine-totals
+# tables the way a dancer actually expects them. One flat list rather than a
+# dict keyed by style: an event only ever uses one style's naming ("Int'l
+# ..." or "Amer. ..." throughout), so there's no risk of these interleaving,
+# and matching happens by the full "Int'l Waltz"/"Amer. Waltz" phrase (never
+# a bare "Waltz"), so a longer phrase like "Int'l Viennese Waltz" is never
+# mistaken for a shorter one earlier in the list.
+_DANCE_ORDER = [
+    # International Standard/Ballroom (W, T, VW, F, Q)
+    "Int'l Waltz", "Int'l Tango", "Int'l Viennese Waltz", "Int'l Foxtrot", "Int'l Quickstep",
+    # International Latin (CC, S, R, PD, J)
+    "Int'l Cha Cha", "Int'l Samba", "Int'l Rumba", "Int'l Paso Doble", "Int'l Jive",
+    # American Smooth (W, T, F, VW)
+    "Amer. Waltz", "Amer. Tango", "Amer. Foxtrot", "Amer. Viennese Waltz",
+    # American Rhythm (CC, R, SW/ECS, B, M)
+    "Amer. Cha Cha", "Amer. Rumba", "Amer. Swing", "Amer. Bolero", "Amer. Mambo",
+]
 
 
 def _dance_sort_key(dance_name: str) -> tuple[int, str]:
     name = dance_name or ""
-    for i, keyword in enumerate(_LATIN_DANCE_ORDER):
+    for i, keyword in enumerate(_DANCE_ORDER):
         if keyword.lower() in name.lower():
             return (i, name)
-    return (len(_LATIN_DANCE_ORDER), name)
+    return (len(_DANCE_ORDER), name)
 
 
 def marks_detail_for_entry(session, entry_id: int, comp_event_id: int) -> pd.DataFrame:
@@ -1277,6 +1353,106 @@ def marks_judge_totals(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(out).reset_index(drop=True)
 
 
+def _marks_raw_for_event(session, comp_event_id: int) -> pd.DataFrame:
+    """One row per (entry, round, dance) total judges' marks for the whole
+    event -- the shared raw material for marks_tabulation_for_event and
+    marks_by_routine_for_event below, so a field-wide "every couple side
+    by side" view stays in agreement with marks_detail_for_entry's own
+    per-couple totals instead of re-deriving the same arithmetic twice.
+    Sums straight over judges here (marks_detail_for_entry keeps the
+    per-judge rows since its callers break totals down by judge too;
+    these two callers only ever want the round/dance total).
+
+    The Final round's judges give a per-dance placement (Mark.placement),
+    not a recall mark -- its "total" is the sum of those placements
+    (lower is better, unlike every other round's mark count), the same
+    unofficial "sum, not the real Skating System result" arithmetic
+    marks_detail_with_totals already surfaces per couple; the official
+    result is Placement, already its own column on the main results
+    table."""
+    rounds = list(session.scalars(select(Round).where(Round.comp_event_id == comp_event_id)).all())
+    if not rounds:
+        return pd.DataFrame()
+    round_by_id = {r.id: r for r in rounds}
+    rows = session.execute(
+        select(Mark.entry_id, Mark.round_id, Mark.dance, Mark.recalled, Mark.placement).where(
+            Mark.round_id.in_(list(round_by_id.keys()))
+        )
+    ).all()
+    out = []
+    for entry_id, round_id, dance, recalled, placement in rows:
+        round_row = round_by_id[round_id]
+        numeric = placement if placement is not None else (int(recalled) if recalled is not None else 0)
+        out.append(
+            {
+                "_entry_id": entry_id,
+                "_round_order": round_row.round_order,
+                "Round": "Final" if round_row.round_type.lower() == "final" else round_row.round_type,
+                "Dance": dance,
+                "_numeric": numeric,
+            }
+        )
+    return pd.DataFrame(out)
+
+
+def marks_tabulation_for_event(session, comp_event_id: int) -> pd.DataFrame:
+    """Every couple's total marks per round, side by side, in one table --
+    a field-wide companion to marks_round_totals, which only covers
+    whichever one couple is picked from the dropdown below. Non-Final
+    columns: higher is better (how many of that round's judge-dance marks
+    went this couple's way). Final: lower is better (see
+    _marks_raw_for_event for why it's a raw placement sum, not the
+    official result)."""
+    raw = _marks_raw_for_event(session, comp_event_id)
+    if raw.empty:
+        return raw
+    round_order = raw[["_round_order", "Round"]].drop_duplicates().sort_values("_round_order")["Round"].tolist()
+    totals = raw.groupby(["_entry_id", "Round"])["_numeric"].sum().reset_index()
+    pivot = totals.pivot(index="_entry_id", columns="Round", values="_numeric")[round_order]
+    return pivot.reset_index()
+
+
+def marks_by_routine_for_event(session, comp_event_id: int) -> pd.DataFrame:
+    """Every couple's marks broken down by round AND dance, side by side --
+    the routine-level companion to marks_tabulation_for_event (which only
+    totals a whole round), for seeing which specific dance cost a couple
+    marks rather than just the round total. Dances ordered via
+    _dance_sort_key within each round, the same syllabus order
+    marks_dance_totals and marks_detail_for_entry already use."""
+    raw = _marks_raw_for_event(session, comp_event_id)
+    if raw.empty:
+        return raw
+    combos = raw[["_round_order", "Round", "Dance"]].drop_duplicates().copy()
+    combos["_dance_order"] = combos["Dance"].map(_dance_sort_key)
+    combos["_col"] = combos["Round"] + " - " + combos["Dance"]
+    column_order = combos.sort_values(["_round_order", "_dance_order"])["_col"].tolist()
+
+    raw = raw.copy()
+    raw["_col"] = raw["Round"] + " - " + raw["Dance"]
+    totals = raw.groupby(["_entry_id", "_col"])["_numeric"].sum().reset_index()
+    pivot = totals.pivot(index="_entry_id", columns="_col", values="_numeric")[column_order]
+    return pivot.reset_index()
+
+
+def _labeled_marks_pivot(results_df: pd.DataFrame, pivot: pd.DataFrame) -> pd.DataFrame:
+    """Left-joins a marks_tabulation_for_event/marks_by_routine_for_event
+    pivot onto the main results table's Couple/Placement columns, in that
+    table's own final-result order -- a couple knocked out before some
+    later round/dance just gets a blank cell there rather than a row of
+    its own -- Int64 (pandas' nullable integer type), not the plain
+    float64-with-NaN pivot() itself produces: both display a blank cell
+    for the missing entries, but a plain float column's whole numbers
+    round-trip through CSV as "13.0" instead of "13"."""
+    if pivot.empty:
+        return pivot
+    combined = results_df[["Couple", "Placement", "_entry_id"]].merge(pivot, on="_entry_id", how="left")
+    combined = combined.drop(columns="_entry_id")
+    for col in combined.columns:
+        if col not in ("Couple", "Placement"):
+            combined[col] = combined[col].astype("Int64")
+    return combined
+
+
 def competition_search(session, *, linked_competition_id: int | None = None, linked_event_id: int | None = None) -> None:
     """linked_competition_id/linked_event_id come from the "View" link
     column on the dancer page (see main()) -- when set and the search box
@@ -1309,15 +1485,25 @@ def competition_search(session, *, linked_competition_id: int | None = None, lin
             choice = st.selectbox("Multiple matches -- pick one:", list(options.keys()))
             competition = options[choice]
 
-    st.header(competition.name)
-    cols = st.columns(4)
-    date_range = str(competition.start_date)
-    if competition.end_date and competition.end_date != competition.start_date:
-        date_range += f" - {competition.end_date}"
-    cols[0].metric("Dates", date_range)
-    cols[1].metric("Location", ", ".join(p for p in (competition.city, competition.country) if p) or "unknown")
-    cols[2].metric("Sanctioning body", competition.sanctioning_body or "unknown")
-    cols[3].metric("Source", competition.source)
+    date_range = _format_date_range(competition.start_date, competition.end_date)
+    subtitle = ", ".join(p for p in (date_range, competition.city) if p)
+    # A plain st.header + st.caption pair (tried first) put the subtitle
+    # both too small (caption's muted small text) and too far below the
+    # title (each is its own block with its own margin, and a 36px
+    # heading's own line-height added more gap on top of that) -- per
+    # user feedback. A negative margin on the subtitle's own div is the
+    # only way to pull it up against the heading's line-height without
+    # shrinking the heading itself, which plain markdown block-grouping
+    # can't do -- the one unsafe_allow_html in this file, so the
+    # interpolated name/subtitle (scraped from NDCA, not user input, but
+    # not implicitly trusted either) are HTML-escaped rather than passed
+    # through raw.
+    st.markdown(f"## {escape(competition.name)}", unsafe_allow_html=False)
+    if subtitle:
+        st.markdown(
+            f"<div style='margin-top:-0.75rem;font-size:1.05rem'>{escape(subtitle)}</div>",
+            unsafe_allow_html=True,
+        )
 
     events = events_for_competition(session, competition.id)
     if not events:
@@ -1370,6 +1556,129 @@ def competition_search(session, *, linked_competition_id: int | None = None, lin
             column_config=_PARTNER_LINK_COLUMN_CONFIG,
         )
         _download_buttons(df, display_cols, f"{competition.name} - {event.raw_title} results", event.raw_title)
+
+        with st.expander("Marks tabulation (every couple, by round and routine)"):
+            st.caption(
+                "Every couple, in final result order. Non-Final columns: total judges' "
+                "marks that round/dance (higher is better). Final column(s): sum of "
+                "judges' per-dance placements (lower is better) -- see Placement above "
+                "for the official result."
+            )
+            tabulation = _labeled_marks_pivot(df, marks_tabulation_for_event(session, event.id))
+            if tabulation.empty:
+                st.write("No marks on file for this event.")
+            else:
+                st.write("**Total marks by round**")
+                st.dataframe(tabulation, use_container_width=True, hide_index=True)
+                _download_buttons(
+                    tabulation,
+                    list(tabulation.columns),
+                    f"{competition.name} - {event.raw_title} marks tabulation",
+                    f"{event.raw_title} -- Marks Tabulation",
+                )
+                # Final excluded from the chart (though not the table above)
+                # -- its placement-sum is a different scale than every other
+                # round's mark count (100s vs 10s-60s) and runs the opposite
+                # direction (lower is better), so a bar chart mixing them in
+                # dwarfed the marks bars and made a worse Final look like a
+                # bigger, "better" bar. Per user feedback.
+                round_cols = [c for c in tabulation.columns if c not in ("Couple", "Placement", "Final")]
+                _grouped_bar_chart(tabulation.set_index("Couple")[round_cols], round_cols)
+
+                routine = _labeled_marks_pivot(df, marks_by_routine_for_event(session, event.id))
+                st.write("**Marks by routine and round**")
+                st.dataframe(routine, use_container_width=True, hide_index=True)
+                _download_buttons(
+                    routine,
+                    list(routine.columns),
+                    f"{competition.name} - {event.raw_title} marks by routine",
+                    f"{event.raw_title} -- Marks by Routine",
+                )
+                # One grouped bar chart per round (not all round-dance columns
+                # at once -- e.g. 4 rounds x 5 dances is unreadable as a single
+                # chart), picked via a dropdown rather than a chart per round
+                # so the page doesn't grow unbounded with more rounds.
+                routine_cols = [c for c in routine.columns if c not in ("Couple", "Placement")]
+                if routine_cols:
+                    rounds_present = list(dict.fromkeys(c.split(" - ", 1)[0] for c in routine_cols))
+                    chart_round = st.selectbox(
+                        "Chart which round?", rounds_present, key=f"routine_chart_round_{event.id}"
+                    )
+                    chart_cols = [c for c in routine_cols if c.split(" - ", 1)[0] == chart_round]
+                    _grouped_bar_chart(routine.set_index("Couple")[chart_cols], chart_cols)
+
+        if not tabulation.empty:
+            with st.expander("Compare couples head-to-head"):
+                # Anchor picked first (pill buttons, single-select -- one
+                # couple, e.g. "our couple") then who to compare them
+                # against (pill buttons, multi-select -- a couple of
+                # rivals), rather than one flat multiselect for all of them
+                # -- per user feedback, picking an anchor first reads more
+                # naturally than hunting for 2-3 names in one list with no
+                # sense of which one you actually care about, and the same
+                # pill-button style reads better than a dropdown for the
+                # anchor too. The "compare against" pills still only appear
+                # once an anchor is picked -- with no anchor there's nothing
+                # yet to compare against.
+                couple_choices = df["Couple"].tolist()
+                anchor = st.pills(
+                    "Anchor couple",
+                    couple_choices,
+                    selection_mode="single",
+                    key=f"compare_anchor_{event.id}",
+                )
+                compare_choices = []
+                if anchor is None:
+                    st.info("Pick an anchor couple to compare.")
+                else:
+                    others = st.pills(
+                        "Compare against",
+                        [c for c in couple_choices if c != anchor],
+                        selection_mode="multi",
+                        key=f"compare_others_{event.id}",
+                    )
+                    if len(others) > 2:
+                        st.warning("Only the first 2 picks below are used.")
+                        others = others[:2]
+                    compare_choices = [anchor] + others
+                if not compare_choices or len(compare_choices) < 2:
+                    if anchor is not None:
+                        st.info("Pick 1 or 2 couples to compare against the anchor.")
+                else:
+                    # Transposed (couples as columns, metrics as rows) rather
+                    # than the field-wide tables' own shape -- side by side is
+                    # the whole point of a head-to-head view, and reads far
+                    # better for 2-3 couples than 2-3 rows in a wide table.
+                    # Stringified via _pdf_cell_str (blank for a round/dance a
+                    # couple never reached, plain int otherwise) before the
+                    # transpose -- an Int64 column's pd.NA survives a
+                    # transpose as a raw Python object, which broke Arrow
+                    # serialization the same way plain int/"" mixing did
+                    # earlier (see _labeled_marks_pivot).
+                    compare_tab = tabulation.set_index("Couple").loc[compare_choices]
+                    st.write("**Total marks by round**")
+                    st.dataframe(compare_tab.map(_pdf_cell_str).T, use_container_width=True)
+                    # Final excluded from the chart for the same reason as the
+                    # field-wide chart above: different scale, opposite
+                    # direction (lower is better) from every other round.
+                    compare_round_cols = [c for c in compare_tab.columns if c not in ("Placement", "Final")]
+                    _grouped_bar_chart(compare_tab[compare_round_cols], compare_round_cols)
+
+                    compare_routine = routine.set_index("Couple").loc[compare_choices]
+                    st.write("**Marks by routine and round**")
+                    st.dataframe(compare_routine.map(_pdf_cell_str).T, use_container_width=True)
+                    compare_routine_cols = [c for c in compare_routine.columns if c != "Placement"]
+                    if compare_routine_cols:
+                        compare_rounds_present = list(
+                            dict.fromkeys(c.split(" - ", 1)[0] for c in compare_routine_cols)
+                        )
+                        compare_chart_round = st.selectbox(
+                            "Chart which round?", compare_rounds_present, key=f"compare_chart_round_{event.id}"
+                        )
+                        compare_chart_cols = [
+                            c for c in compare_routine_cols if c.split(" - ", 1)[0] == compare_chart_round
+                        ]
+                        _grouped_bar_chart(compare_routine[compare_chart_cols], compare_chart_cols)
 
         st.subheader("Judges' marks")
         couple_options = dict(zip(df["Couple"], df["_entry_id"]))
@@ -1442,10 +1751,7 @@ def heat_list_search(session, *, linked_competition_id: int | None = None, linke
 
     st.header(competition.name)
     cols = st.columns(3)
-    date_range = str(competition.start_date)
-    if competition.end_date and competition.end_date != competition.start_date:
-        date_range += f" - {competition.end_date}"
-    cols[0].metric("Dates", date_range)
+    cols[0].metric("Dates", _format_date_range(competition.start_date, competition.end_date))
     cols[1].metric("Location", ", ".join(p for p in (competition.city, competition.country) if p) or "unknown")
     cols[2].metric("Sanctioning body", competition.sanctioning_body or "unknown")
 
@@ -1483,6 +1789,9 @@ def heat_list_search(session, *, linked_competition_id: int | None = None, linke
     category_choice = filter_cols[2].selectbox("Filter by category", ["All"] + categories)
     floors = sorted(f for f in df["Floor"].dropna().unique().tolist())
     floor_choice = filter_cols[2].selectbox("Filter by floor", ["All"] + floors)
+    number_cols = st.columns(2)
+    heat_number_filter = number_cols[0].text_input("Filter by heat number", "", help="Exact match, e.g. '12'")
+    couple_number_filter = number_cols[1].text_input("Filter by couple number", "", help="Exact match, e.g. '507'")
     hide_danced = st.checkbox("Hide heats already danced", value=True)
 
     filtered = df
@@ -1506,6 +1815,10 @@ def heat_list_search(session, *, linked_competition_id: int | None = None, linke
         filtered = filtered[filtered["Category"] == category_choice]
     if floor_choice != "All":
         filtered = filtered[filtered["Floor"] == floor_choice]
+    if heat_number_filter.strip():
+        filtered = filtered[filtered["Heat #"].astype(str) == heat_number_filter.strip()]
+    if couple_number_filter.strip():
+        filtered = filtered[filtered["Start #"].astype(str) == couple_number_filter.strip()]
     if hide_danced:
         filtered = filtered[filtered["Danced"] == "No"]
 
