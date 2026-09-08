@@ -39,7 +39,7 @@ from dsr.parse.staging import (
     StagingOfficial,
     StagingPersonRef,
 )
-from dsr.resolve.entities import resolve_partnership, resolve_person
+from dsr.resolve.entities import resolve_partnership, resolve_partnership_either_order, resolve_person
 
 # Explicit style-category words -- present on multi-dance/combined titles
 # ("Amer. Rhythm Championship", "Int'l Ballroom (W,T,VW,F,Q)"). "Ballroom"
@@ -293,7 +293,13 @@ def load_ranking_page(
                 country=staging_entry.country,
                 partner_person_ids=frozenset({leader.id}),
             )
-            partnership = resolve_partnership(session, leader=leader, follower=follower, kind="amateur")
+            # Either order: a couple's leader/follower isn't always recorded
+            # consistently across sources/competitions -- see
+            # resolve_partnership_either_order's own docstring for the real
+            # case (a results load and a later heat-list load disagreeing
+            # on which partner was leader) that split one couple across two
+            # Partnership rows before this was used here too.
+            partnership = resolve_partnership_either_order(session, leader, follower, kind="amateur")
         else:
             partnership = resolve_partnership(session, leader=leader, follower=None, kind="solo")
         entry = _load_entry(session, competition, partnership.id, staging_entry.competitor_no)

@@ -7,34 +7,12 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from dsr.models import Competition, Partnership, ScheduledHeat
+from dsr.models import Competition, ScheduledHeat
 from dsr.parse.staging import StagingScheduledHeat
-from dsr.resolve.entities import resolve_partnership, resolve_person
-
-
-def _resolve_partnership_either_order(session: Session, person_a, person_b, *, kind: str) -> Partnership:
-    """Unlike results (see dsr.parse.ndca.parse_heatlist_attendee's
-    docstring), a heat-list couple's leader/follower order depends on
-    which attendee happened to be queried, not a stable source-side
-    order -- checking both orders before resolve_partnership's own
-    create-or-find avoids creating a second, duplicate Partnership row
-    for a couple that's already on file (e.g. from a past competition's
-    results) in the opposite order."""
-    existing = session.scalar(
-        select(Partnership).where(
-            or_(
-                and_(Partnership.leader_id == person_a.id, Partnership.follower_id == person_b.id),
-                and_(Partnership.leader_id == person_b.id, Partnership.follower_id == person_a.id),
-            ),
-            Partnership.kind == kind,
-        )
-    )
-    if existing is not None:
-        return existing
-    return resolve_partnership(session, leader=person_a, follower=person_b, kind=kind)
+from dsr.resolve.entities import resolve_partnership, resolve_partnership_either_order, resolve_person
 
 
 def load_scheduled_heat(
@@ -49,7 +27,7 @@ def load_scheduled_heat(
         partner_2 = resolve_person(
             session, source=source, ref=staging.partner_2, country=None, partner_person_ids=frozenset({partner_1.id})
         )
-        partnership = _resolve_partnership_either_order(session, partner_1, partner_2, kind="amateur")
+        partnership = resolve_partnership_either_order(session, partner_1, partner_2, kind="amateur")
     else:
         partnership = resolve_partnership(session, leader=partner_1, follower=None, kind="solo")
 

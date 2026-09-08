@@ -12,7 +12,7 @@ Implements spec section 5's algorithm in order:
 """
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from dsr.models import Partnership, Person, PersonAlias, ResolutionQueue
@@ -165,3 +165,33 @@ def resolve_partnership(
         session.add(partnership)
         session.flush()
     return partnership
+
+
+def resolve_partnership_either_order(session: Session, person_a: Person, person_b: Person, *, kind: str) -> Partnership:
+    """Like resolve_partnership, but for a couple (not solo -- there's only
+    one order to check there): looks for an existing partnership in EITHER
+    leader/follower order before creating a new one.
+
+    A given couple's leader/follower order isn't always recorded
+    consistently across different sources/competitions -- real case: a
+    junior couple's NDCA results listed one partner as leader, while a
+    later heat list (loaded via the plain, order-sensitive
+    resolve_partnership) listed the other partner first, splitting the
+    couple across two Partnership rows. Each row then carried only its own
+    share of that couple's entries/scheduled heats, showing up as
+    duplicated entries on the dancer/heat-list pages. Used by both the
+    heat-list loader and the results loader (dsr.load.wdsf) for the couple
+    case; solo entries (follower=None) have no order to disagree on, so
+    they still go through plain resolve_partnership."""
+    existing = session.scalar(
+        select(Partnership).where(
+            or_(
+                and_(Partnership.leader_id == person_a.id, Partnership.follower_id == person_b.id),
+                and_(Partnership.leader_id == person_b.id, Partnership.follower_id == person_a.id),
+            ),
+            Partnership.kind == kind,
+        )
+    )
+    if existing is not None:
+        return existing
+    return resolve_partnership(session, leader=person_a, follower=person_b, kind=kind)
