@@ -847,27 +847,38 @@ def _event_summary_pdf_bytes(
     return buf.getvalue()
 
 
-def _download_buttons(df: pd.DataFrame, display_cols: list[str], file_stem: str, title: str, container=st) -> None:
+def _download_buttons(
+    df: pd.DataFrame, display_cols: list[str], file_stem: str, title: str, container=st, key: str | None = None
+) -> None:
     """CSV + PDF download buttons for the same table, side by side. Used
     everywhere a table on this page is worth exporting whole, in place of
     (or alongside) st.dataframe's own per-table "Download as CSV" toolbar
     button, which has no PDF equivalent and can't export a filtered view
-    that spans several separately-rendered tables (see heat_list_search)."""
+    that spans several separately-rendered tables (see heat_list_search).
+
+    key defaults to file_stem, which is unique everywhere this is called
+    except dancer_search: two distinct partnerships between the same two
+    people (e.g. one Competitive, one Instructor-style -- see
+    _classify_titles) share the exact same partner_label text, and two
+    download_buttons with the same key crashes the whole page
+    (StreamlitDuplicateElementKey) -- dancer_search passes the
+    partnership's own id as key there so the label can repeat safely."""
     file_stem = file_stem.replace("/", "-")
+    key = (key or file_stem).replace("/", "-")
     cols = container.columns(2)
     cols[0].download_button(
         "Download as CSV",
         df[display_cols].to_csv(index=False).encode("utf-8"),
         file_name=f"{file_stem}.csv",
         mime="text/csv",
-        key=f"csv_{file_stem}",
+        key=f"csv_{key}",
     )
     cols[1].download_button(
         "Download as PDF",
         _table_pdf_bytes(df[display_cols], title),
         file_name=f"{file_stem}.pdf",
         mime="application/pdf",
-        key=f"pdf_{file_stem}",
+        key=f"pdf_{key}",
     )
 
 
@@ -2176,7 +2187,7 @@ def dancer_search(
                     continue
 
                 st.dataframe(df, use_container_width=True, hide_index=True, column_config=_VIEW_LINK_COLUMN_CONFIG)
-                _download_buttons(df, list(df.columns), f"{label} results", label)
+                _download_buttons(df, list(df.columns), f"{label} results", label, key=f"{label} results {partnership.id}")
 
                 best = best_results(df)
                 if not best.empty:
