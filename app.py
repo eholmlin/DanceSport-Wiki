@@ -2187,7 +2187,17 @@ def dancer_search(
                     continue
 
                 st.dataframe(df, use_container_width=True, hide_index=True, column_config=_VIEW_LINK_COLUMN_CONFIG)
-                _download_buttons(df, list(df.columns), f"{label} results", label, key=f"{label} results {partnership.id}")
+                # category is part of the key, not just partnership.id: the
+                # same partnership can appear in two sections at once (see
+                # the "Split per result rather than per partnership"
+                # comment above), each with its own subset of results and
+                # its own pair of download buttons -- id alone still
+                # collided across those two renders of the same
+                # partnership, which is exactly the "still crashes" report
+                # after the first, id-only fix.
+                _download_buttons(
+                    df, list(df.columns), f"{label} results", label, key=f"{label} results {partnership.id} {category}"
+                )
 
                 best = best_results(df)
                 if not best.empty:
