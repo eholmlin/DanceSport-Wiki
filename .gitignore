@@ -14,3 +14,4 @@ data/.pro_am_backfill_checkpoint
 *.sqlite
 *.sqlite3
 .DS_Store
+logs/
