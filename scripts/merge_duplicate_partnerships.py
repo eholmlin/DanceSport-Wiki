@@ -95,6 +95,17 @@ def main() -> None:
                     heat.partnership_id = keep.id
                     heats_moved += 1
 
+            # Explicit flush before deleting the now-unreferenced partnership
+            # -- there's no ORM relationship() between ScheduledHeat and
+            # Partnership (just a bare FK column), so SQLAlchemy's unit of
+            # work has no way to know the scheduled_heat reassignments above
+            # must be written before this delete. SQLite doesn't enforce FK
+            # constraints by default and let the wrong order slide silently;
+            # Postgres (production) does, and failed with
+            # "update or delete on table partnership violates foreign key
+            # constraint scheduled_heat_partnership_id_fkey" the first time
+            # this ran against it.
+            session.flush()
             session.delete(remove)
             merged += 1
 
