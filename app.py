@@ -1156,6 +1156,15 @@ def _field_results_for_comp_events(session, comp_event_ids: list[int]) -> dict[i
                     "_marks_total": marks_totals.get((row.entry_id, row.round_id), 0) if row.round_id is not None else 0,
                     "_first_name": (row.couple.split(" & ")[0].split() or [""])[0],
                     "_entry_id": row.entry_id,
+                    # Kept for the same reason as _entry_id: callers that need
+                    # to identify a couple across events (e.g. compare_events_
+                    # search's cross-competition roster overlap) need the
+                    # stable partnership id, not the "Couple" display string
+                    # -- two different real couples can share display text
+                    # (common names), and the same couple's own text can
+                    # theoretically change (a display_name edit) between
+                    # loads.
+                    "_partnership_id": row.partnership_id,
                 }
             )
         df = pd.DataFrame(out)
@@ -1719,6 +1728,22 @@ def competition_search(session, *, linked_competition_id: int | None = None, lin
         )
         _download_buttons(df, display_cols, f"{competition.name} - {event.raw_title} results", event.raw_title)
 
+        if st.button("Compare this event with another competition", key=f"compare_link_results_{event.id}"):
+            st.query_params["compare_a_competition_id"] = str(competition.id)
+            st.query_params["compare_a_source"] = "results"
+            st.query_params["compare_a_ref"] = str(event.id)
+            # Can't assign search_mode_radio directly here -- the radio
+            # widget already ran earlier this same script execution (in
+            # main(), before dispatching to this page), and Streamlit
+            # forbids writing to a widget's key after it's instantiated
+            # for the run ("cannot be modified after the widget ... is
+            # instantiated"). Popping it instead is unrestricted, and
+            # leaves main()'s own seeding logic (which reads the query
+            # params just set above) to pick "Compare Events" on the
+            # rerun, before the radio is instantiated again.
+            st.session_state.pop("search_mode_radio", None)
+            st.rerun()
+
         with st.expander("Marks tabulation (every couple, by round and routine)"):
             st.caption(
                 "Every couple, in final result order. Non-Final columns: total judges' "
@@ -2019,6 +2044,15 @@ def heat_list_search(session, *, linked_competition_id: int | None = None, linke
             filtered, use_container_width=True, hide_index=True, column_order=event_cols,
             column_config=_HEAT_LIST_LINK_COLUMN_CONFIG,
         )
+        source_event_id = filtered["_source_event_id"].iloc[0]
+        if st.button("Compare this event with another competition", key=f"compare_link_heat_{competition.id}_{source_event_id}"):
+            st.query_params["compare_a_competition_id"] = str(competition.id)
+            st.query_params["compare_a_source"] = "heatlist"
+            st.query_params["compare_a_ref"] = source_event_id
+            # See the matching comment on competition_search's own
+            # "Compare this event" button -- pop, don't assign.
+            st.session_state.pop("search_mode_radio", None)
+            st.rerun()
         return
 
     # Otherwise, grouped by partnership (one expander per couple, each
@@ -2211,6 +2245,228 @@ def dancer_search(
                     )
 
 
+def _heat_list_event_roster(session, db_identity: str, competition_id: int, source_event_id: str) -> pd.DataFrame:
+    """A compare_events_search-shaped roster (Couple, Placement,
+    _partnership_id) built from a competition's heat list for one event,
+    for comparing against another competition before this event has been
+    danced/results-loaded. Every row gets the constant "Not danced yet"
+    Placement -- there's no result yet for any of them -- so the overlap
+    table still reads sensibly next to a results-based roster on the
+    other side, and doesn't read like an actual (round-based) placement.
+    Per user request."""
+    df = heat_list_for_competition(session, db_identity, competition_id)
+    if df.empty:
+        return df
+    event_df = df[df["_source_event_id"] == source_event_id]
+    if event_df.empty:
+        return event_df
+    roster = event_df.drop_duplicates("_partnership_id", keep="last")[["Couple", "_partnership_id"]].reset_index(
+        drop=True
+    )
+    roster["Placement"] = "Not danced yet"
+    return roster[["Couple", "Placement", "_partnership_id"]]
+
+
+def _pick_competition_event(
+    session, label: str, key_prefix: str, *, locked: tuple[Competition, str, str] | None = None
+) -> tuple[Competition | None, pd.DataFrame, str]:
+    """One side of compare_events_search's pair of pickers.
+
+    Normally a name search down to one competition, then an event within
+    it -- the same two-step shape as competition_search's own search,
+    just without that page's "linked_*" cross-link handling.
+
+    `locked`, when given (a "Compare this event" link from the
+    Competition or Heat Lists page: (competition, source, ref), source is
+    "results" or "heatlist", ref is a CompEvent id or a heat list's own
+    source_event_id to match), skips the search entirely and shows a
+    "Change" button to drop the lock and search fresh instead --
+    heat_list_search's own "Show full competition schedule" escape hatch,
+    same idea.
+
+    Returns (competition, roster_df, event_label); roster_df is already
+    in the shared (Couple, Placement, _partnership_id) shape regardless
+    of which source this side ended up using."""
+    if locked is not None:
+        competition, source, ref = locked
+        st.write(f"**{competition.name}**")
+        if st.button(f"Change competition {label}", key=f"{key_prefix}_unlock"):
+            for suffix in ("competition_id", "source", "ref"):
+                st.query_params.pop(f"compare_{key_prefix}_{suffix}", None)
+            st.rerun()
+        if source == "results":
+            event = session.get(CompEvent, int(ref))
+            if event is None:
+                st.warning("That event no longer exists.")
+                return competition, pd.DataFrame(), ""
+            return competition, results_for_comp_event(session, event.id), event.raw_title
+        db_identity = _db_identity(session)
+        heat_df = heat_list_for_competition(session, db_identity, competition.id)
+        match = heat_df.loc[heat_df["_source_event_id"] == ref, "Event"] if not heat_df.empty else None
+        event_label = match.iloc[0] if match is not None and not match.empty else ref
+        return competition, _heat_list_event_roster(session, db_identity, competition.id, ref), event_label
+
+    term = st.text_input(f"Competition {label}", "", key=f"{key_prefix}_term")
+    if not term:
+        return None, pd.DataFrame(), ""
+    competitions = search_competitions(session, term)
+    if not competitions:
+        st.warning(f"No competitions found matching {term!r}.")
+        return None, pd.DataFrame(), ""
+    if len(competitions) == 1:
+        competition = competitions[0]
+    else:
+        options = {f"{c.name} ({c.start_date})": c for c in competitions}
+        choice = st.selectbox(f"Multiple matches for {label} -- pick one:", list(options.keys()), key=f"{key_prefix}_pick")
+        competition = options[choice]
+
+    events = events_for_competition(session, competition.id)
+    # Events with no results loaded yet (upcoming/in-progress competition)
+    # have no CompEvent row at all -- only their heat list schedule. Not
+    # listing those meant the manual picker could only ever reach a
+    # competition that already had results for the division you wanted,
+    # even though the same comparison (via the "Compare this event" link
+    # from Heat Lists) worked fine off a heat list alone. Per user
+    # request: fold those in here too, distinguished with a "(not yet
+    # danced)" suffix, and excluded whenever the same title already has a
+    # results-based entry (same division, just already further along) so
+    # it isn't offered twice.
+    db_identity = _db_identity(session)
+    heat_df = heat_list_for_competition(session, db_identity, competition.id)
+    existing_titles = {e.raw_title for e in events}
+    heat_only_events: list[tuple[str, str, str]] = []  # (source_event_id, event_name, style)
+    if not heat_df.empty:
+        heat_only = heat_df[~heat_df["Event"].isin(existing_titles)]
+        heat_only_events = list(
+            heat_only.drop_duplicates("_source_event_id")[["_source_event_id", "Event", "Style"]].itertuples(
+                index=False, name=None
+            )
+        )
+    if not events and not heat_only_events:
+        st.warning("No events on file for this competition yet.")
+        return competition, pd.DataFrame(), ""
+
+    # A big competition (e.g. Embassy has ~3900 events) makes the plain
+    # event selectbox below a multi-thousand-item dropdown to hunt
+    # through -- same "Filter by style" selectbox + "Filter by event
+    # title" text box competition_search already uses ahead of its own
+    # event selectbox, so narrowing down to the couple of events actually
+    # worth picking from is consistent across both pages. Per user
+    # request.
+    styles = sorted({e.style or "unknown" for e in events} | {style for _, _, style in heat_only_events})
+    filter_cols = st.columns(2)
+    style_choice = filter_cols[0].selectbox(f"Filter by style {label}", ["All"] + styles, key=f"{key_prefix}_event_style")
+    event_filter = filter_cols[1].text_input(f"Filter by event title {label}", "", key=f"{key_prefix}_event_filter")
+
+    # option label -> ("results", CompEvent) | ("heatlist", source_event_id, event_name)
+    options: dict[str, tuple] = {}
+    for e in events:
+        if style_choice != "All" and (e.style or "unknown") != style_choice:
+            continue
+        if event_filter and event_filter.lower() not in e.raw_title.lower():
+            continue
+        options[e.raw_title] = ("results", e)
+    for source_event_id, event_name, style in heat_only_events:
+        if style_choice != "All" and style != style_choice:
+            continue
+        if event_filter and event_filter.lower() not in event_name.lower():
+            continue
+        options[f"{event_name} (not yet danced)"] = ("heatlist", source_event_id, event_name)
+
+    if not options:
+        st.warning("No events match this filter.")
+        return competition, pd.DataFrame(), ""
+    event_choice = st.selectbox(f"Event {label}", sorted(options.keys()), key=f"{key_prefix}_event")
+    choice = options[event_choice]
+    if choice[0] == "results":
+        event = choice[1]
+        return competition, results_for_comp_event(session, event.id), event.raw_title
+    _, source_event_id, event_name = choice
+    return competition, _heat_list_event_roster(session, db_identity, competition.id, source_event_id), event_name
+
+
+def compare_events_search(
+    session,
+    *,
+    linked_a_competition_id: int | None = None,
+    linked_a_source: str | None = None,
+    linked_a_ref: str | None = None,
+) -> None:
+    """Cross-competition roster comparison: pick one event at one
+    competition and (often the "same" event by name/division, but not
+    required to be) another at a different competition, and see which
+    couples entered both -- plus how each overlapping couple placed at
+    each, side by side. Different from the Competition page's own
+    "Compare couples head-to-head", which compares marks *within* one
+    event at one competition; this compares *rosters* across two
+    competitions instead. Per user request -- along with reaching this
+    page via a "Compare this event with another competition" link from
+    either the Competition page's results or the Heat Lists page (see
+    linked_a_*, set by main()), rather than only ever starting from a
+    blank search here.
+
+    Matched on _partnership_id (see _field_results_for_comp_events), not
+    the "Couple" display string -- two different real couples can share
+    display text (common names), and matching on the stable id avoids a
+    false-positive "overlap" from that coincidence."""
+    st.caption("See which couples entered a given event at two different competitions.")
+    locked_a = None
+    if linked_a_competition_id is not None and linked_a_source is not None and linked_a_ref is not None:
+        competition = session.get(Competition, linked_a_competition_id)
+        if competition is not None:
+            locked_a = (competition, linked_a_source, linked_a_ref)
+
+    cols = st.columns(2)
+    with cols[0]:
+        competition_a, roster_a, label_a = _pick_competition_event(session, "A", "cmp_a", locked=locked_a)
+    with cols[1]:
+        competition_b, roster_b, label_b = _pick_competition_event(session, "B", "cmp_b")
+
+    if roster_a.empty or roster_b.empty:
+        st.info("Pick a competition and event on both sides to compare.")
+        return
+
+    ids_a = set(roster_a["_partnership_id"])
+    ids_b = set(roster_b["_partnership_id"])
+    overlap_ids = ids_a & ids_b
+
+    st.subheader(
+        f"{len(overlap_ids)} couple(s) entered both -- {len(ids_a) - len(overlap_ids)} only at "
+        f"{competition_a.name}, {len(ids_b) - len(overlap_ids)} only at {competition_b.name}"
+    )
+
+    if overlap_ids:
+        st.write("**Entered both**")
+        # Two different competitions can share the same name (a recurring
+        # annual event compared year over year, the usual case this page
+        # is for) -- plain name-based suffixes would then collide into two
+        # identically-named "Placement" columns, which st.dataframe can't
+        # render (pyarrow rejects duplicate column names). Fall back to
+        # start_date, then an outright A/B tag, until the pair is unique.
+        suffix_a, suffix_b = f" -- {competition_a.name}", f" -- {competition_b.name}"
+        if suffix_a == suffix_b:
+            suffix_a += f" ({competition_a.start_date})"
+            suffix_b += f" ({competition_b.start_date})"
+        if suffix_a == suffix_b:
+            suffix_a, suffix_b = f"{suffix_a} A", f"{suffix_b} B"
+        merged = roster_a[roster_a["_partnership_id"].isin(overlap_ids)][["Couple", "Placement", "_partnership_id"]].merge(
+            roster_b[["Placement", "_partnership_id"]], on="_partnership_id", suffixes=(suffix_a, suffix_b)
+        )
+        merged = merged.drop(columns="_partnership_id")
+        st.dataframe(merged, use_container_width=True, hide_index=True)
+        _download_buttons(merged, list(merged.columns), f"{label_a} vs {label_b} overlap", f"{label_a} vs {label_b}")
+
+    unique_cols = st.columns(2)
+    only_a = roster_a[~roster_a["_partnership_id"].isin(overlap_ids)][["Couple", "Placement"]]
+    only_b = roster_b[~roster_b["_partnership_id"].isin(overlap_ids)][["Couple", "Placement"]]
+    with unique_cols[0]:
+        st.write(f"**Only at {competition_a.name}** ({len(only_a)})")
+        st.dataframe(only_a, use_container_width=True, hide_index=True)
+    with unique_cols[1]:
+        st.write(f"**Only at {competition_b.name}** ({len(only_b)})")
+        st.dataframe(only_b, use_container_width=True, hide_index=True)
+
+
 def main() -> None:
     session = _session()
     st.title("DanceSport Wiki")
@@ -2227,25 +2483,45 @@ def main() -> None:
     linked_partnership_id = st.query_params.get("partnership_id")
     linked_heat_competition_id = st.query_params.get("heat_competition_id")
     linked_heat_event_id = st.query_params.get("heat_event_id")
+    linked_compare_a_competition_id = st.query_params.get("compare_a_competition_id")
+    linked_compare_a_source = st.query_params.get("compare_a_source")
+    linked_compare_a_ref = st.query_params.get("compare_a_ref")
 
     # A link opens in a new tab (see the comment above), so there's no
     # in-app history to go "back" through -- without this, the only way
     # off a linked-in view was to close the tab or hand-edit the URL.
     # Clearing every query param drops all three linked_* pairs at once
-    # and re-picks the default (unlinked) Dancer-search view below.
+    # and re-picks the default (unlinked) Dancer-search view below. The
+    # mode radio's own remembered selection (see search_mode_radio below)
+    # has to be cleared alongside it -- query params alone no longer
+    # decide the mode on every rerun, just the first one.
     if st.query_params:
         if st.button("← New search"):
             st.query_params.clear()
+            st.session_state.pop("search_mode_radio", None)
             st.rerun()
 
-    mode_options = ["Dancer", "Competition", "Heat Lists"]
-    if linked_heat_competition_id:
-        default_mode_index = mode_options.index("Heat Lists")
-    elif linked_competition_id:
-        default_mode_index = mode_options.index("Competition")
-    else:
-        default_mode_index = 0
-    mode = st.radio("Search by", mode_options, horizontal=True, index=default_mode_index)
+    mode_options = ["Dancer", "Competition", "Heat Lists", "Compare Events"]
+    # A plain index= default only takes effect on this radio's very first
+    # render in a session -- once a user has touched it, Streamlit
+    # remembers that choice via its key and ignores index= on subsequent
+    # reruns. Seeding session_state directly, only when the key doesn't
+    # exist yet, covers the cross-tab "arrived via a link, fresh session"
+    # case (same as index= used to). A same-tab "Compare this event"
+    # button (see competition_search/heat_list_search) can't seed this
+    # key directly instead -- the radio's already instantiated by the time
+    # that button's on-click code runs -- so it pops the key and lets this
+    # same seeding logic re-run fresh on the next rerun.
+    if "search_mode_radio" not in st.session_state:
+        if linked_heat_competition_id:
+            st.session_state["search_mode_radio"] = "Heat Lists"
+        elif linked_competition_id:
+            st.session_state["search_mode_radio"] = "Competition"
+        elif linked_compare_a_competition_id:
+            st.session_state["search_mode_radio"] = "Compare Events"
+        else:
+            st.session_state["search_mode_radio"] = "Dancer"
+    mode = st.radio("Search by", mode_options, horizontal=True, key="search_mode_radio")
     if mode == "Dancer":
         dancer_search(
             session,
@@ -2258,11 +2534,18 @@ def main() -> None:
             linked_competition_id=int(linked_competition_id) if linked_competition_id else None,
             linked_event_id=int(linked_event_id) if linked_event_id else None,
         )
-    else:
+    elif mode == "Heat Lists":
         heat_list_search(
             session,
             linked_competition_id=int(linked_heat_competition_id) if linked_heat_competition_id else None,
             linked_event_id=linked_heat_event_id,
+        )
+    else:
+        compare_events_search(
+            session,
+            linked_a_competition_id=int(linked_compare_a_competition_id) if linked_compare_a_competition_id else None,
+            linked_a_source=linked_compare_a_source,
+            linked_a_ref=linked_compare_a_ref,
         )
 
 
