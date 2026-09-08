@@ -16,7 +16,7 @@ import streamlit as st
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import landscape, letter
 from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlalchemy import func, or_, select
 
 from dsr.db import get_engine, get_session
@@ -687,14 +687,16 @@ def _pdf_cell_str(value) -> str:
     return str(value)
 
 
-def _table_pdf_bytes(df: pd.DataFrame, title: str) -> bytes:
-    """Render any of this app's tables as a landscape PDF, for printing or
-    sharing offline (e.g. at the venue, without a laptop)."""
-    cols = [c for c in df.columns if c not in _LINK_COLUMN_NAMES]
-    buf = BytesIO()
-    doc = SimpleDocTemplate(
-        buf, pagesize=landscape(letter), leftMargin=24, rightMargin=24, topMargin=24, bottomMargin=24
-    )
+def _pdf_table_flowable(df: pd.DataFrame, cols: list[str] | None = None) -> Table:
+    """The styled Table flowable shared by _table_pdf_bytes (one table, one
+    PDF) and _event_summary_pdf_bytes (several tables and chart images in
+    one PDF) -- extracted so a multi-section report can lay out its own
+    Paragraph/Image/PageBreak flowables around each table instead of each
+    table insisting on its own document. A table longer than one page
+    just spills onto the next page (reportlab's own Table pagination) --
+    a two-column same-page layout was tried and dropped as more trouble
+    than it was worth (overlapping columns, awkward text wrapping)."""
+    cols = [c for c in (cols or df.columns) if c not in _LINK_COLUMN_NAMES]
     data = [cols] + [[_pdf_cell_str(v) for v in row] for row in df[cols].itertuples(index=False, name=None)]
     table = Table(data, repeatRows=1)
     table.setStyle(
@@ -709,7 +711,127 @@ def _table_pdf_bytes(df: pd.DataFrame, title: str) -> bytes:
             ]
         )
     )
-    doc.build([Paragraph(title, getSampleStyleSheet()["Heading2"]), Spacer(1, 8), table])
+    return table
+
+
+def _table_pdf_bytes(df: pd.DataFrame, title: str) -> bytes:
+    """Render any of this app's tables as a landscape PDF, for printing or
+    sharing offline (e.g. at the venue, without a laptop)."""
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=landscape(letter), leftMargin=24, rightMargin=24, topMargin=24, bottomMargin=24
+    )
+    doc.build([Paragraph(title, getSampleStyleSheet()["Heading2"]), Spacer(1, 8), _pdf_table_flowable(df)])
+    return buf.getvalue()
+
+
+# reportlab's Image flowable, given no explicit width/height, renders a PNG
+# at one point per pixel -- at _bar_chart_png's 150 dpi that's 1500pt+ wide,
+# many times a landscape letter page's ~740pt printable width. _chart_image
+# below always sets both explicitly, in the same aspect ratio as
+# _bar_chart_png's default figsize, scaled to fit the page.
+_CHART_FIGSIZE = (10, 4.5)
+
+
+def _chart_image(png_bytes: bytes, width: float = 700) -> Image:
+    height = width * _CHART_FIGSIZE[1] / _CHART_FIGSIZE[0]
+    return Image(BytesIO(png_bytes), width=width, height=height)
+
+
+def _bar_chart_png(df: pd.DataFrame, value_cols: list[str], figsize: tuple[float, float] = _CHART_FIGSIZE) -> bytes:
+    """Grouped bar chart rendered as a PNG (matplotlib), for embedding in
+    the event summary PDF report -- reportlab has no native charting, and
+    rasterizing the on-screen Altair chart (_grouped_bar_chart) would need
+    a headless browser or an extra Vega renderer; matplotlib draws the
+    same grouped-bars shape straight from the dataframe, preserving
+    df.index's row order (couples) and value_cols' own order (rounds/
+    dances) exactly -- the same ordering discipline _grouped_bar_chart
+    uses on screen, and for the same reason: nothing here should silently
+    re-sort alphabetically."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    categories = [str(c) for c in df.index]
+    n_series, n_cats = len(value_cols), len(categories)
+    x = np.arange(n_cats)
+    bar_width = 0.8 / max(n_series, 1)
+    fig, ax = plt.subplots(figsize=figsize)
+    max_value = 0
+    for i, col in enumerate(value_cols):
+        heights = [0 if pd.isna(v) else v for v in df[col]]
+        max_value = max(max_value, max(heights, default=0))
+        ax.bar(x + i * bar_width - 0.4 + bar_width / 2, heights, width=bar_width, label=col)
+    ax.set_xticks(x)
+    ax.set_xticklabels(categories, rotation=60, ha="right", fontsize=6)
+    ax.tick_params(axis="y", labelsize=7)
+    ax.legend(fontsize=7, loc="upper right")
+    # 25% headroom above the tallest bar -- per user request, so the legend
+    # (upper right) and the bars themselves don't crowd the top edge.
+    if max_value > 0:
+        ax.set_ylim(0, max_value * 1.25)
+    fig.tight_layout()
+    buf = BytesIO()
+    fig.savefig(buf, format="png", dpi=150)
+    plt.close(fig)
+    return buf.getvalue()
+
+
+def _event_summary_pdf_bytes(
+    competition: Competition,
+    event: CompEvent,
+    results_df: pd.DataFrame,
+    results_cols: list[str],
+    tabulation_df: pd.DataFrame,
+    routine_df: pd.DataFrame,
+) -> bytes:
+    """One PDF covering the whole event, group-level rather than one
+    couple at a time: the field results table, the marks tabulation
+    (table + chart), and marks by routine and round (one table + chart
+    per round) -- per user request for a single downloadable summary
+    instead of stitching together several per-table exports by hand."""
+    styles = getSampleStyleSheet()
+    elements = [
+        Paragraph(f"{competition.name} -- {event.raw_title}", styles["Title"]),
+        Spacer(1, 12),
+        Paragraph("Results", styles["Heading2"]),
+        Spacer(1, 6),
+        _pdf_table_flowable(results_df, results_cols),
+    ]
+
+    if not tabulation_df.empty:
+        round_cols = [c for c in tabulation_df.columns if c not in ("Couple", "Placement", "Final")]
+        elements += [
+            PageBreak(),
+            Paragraph("Marks tabulation -- total marks by round", styles["Heading2"]),
+            Spacer(1, 6),
+            _pdf_table_flowable(tabulation_df),
+        ]
+        if round_cols:
+            png = _bar_chart_png(tabulation_df.set_index("Couple"), round_cols)
+            elements += [Spacer(1, 12), _chart_image(png)]
+
+    if not routine_df.empty:
+        routine_cols = [c for c in routine_df.columns if c not in ("Couple", "Placement")]
+        rounds_present = list(dict.fromkeys(c.split(" - ", 1)[0] for c in routine_cols))
+        for round_name in rounds_present:
+            this_round_cols = [c for c in routine_cols if c.split(" - ", 1)[0] == round_name]
+            elements += [
+                PageBreak(),
+                Paragraph(f"Marks by routine -- {round_name}", styles["Heading2"]),
+                Spacer(1, 6),
+                _pdf_table_flowable(routine_df, ["Couple", "Placement"] + this_round_cols),
+                Spacer(1, 12),
+                _chart_image(_bar_chart_png(routine_df.set_index("Couple"), this_round_cols)),
+            ]
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=landscape(letter), leftMargin=24, rightMargin=24, topMargin=24, bottomMargin=24
+    )
+    doc.build(elements)
     return buf.getvalue()
 
 
@@ -1548,6 +1670,23 @@ def competition_search(session, *, linked_competition_id: int | None = None, lin
         st.write("No results on file for this event.")
     else:
         display_cols = [c for c in df.columns if not c.startswith("_")]
+
+        # Computed here, right after the event is picked, rather than
+        # inside the "Marks tabulation" expander below where they're also
+        # used -- the summary report button (right below the event
+        # selection dropdown, per user request) needs them too, and
+        # computing them twice would double the query cost for no reason.
+        tabulation = _labeled_marks_pivot(df, marks_tabulation_for_event(session, event.id))
+        routine = _labeled_marks_pivot(df, marks_by_routine_for_event(session, event.id))
+
+        st.download_button(
+            "Generate event summary report (PDF)",
+            _event_summary_pdf_bytes(competition, event, df, display_cols, tabulation, routine),
+            file_name=f"{competition.name} - {event.raw_title} summary.pdf".replace("/", "-"),
+            mime="application/pdf",
+            key=f"event_summary_{event.id}",
+        )
+
         st.dataframe(
             df,
             use_container_width=True,
@@ -1564,7 +1703,6 @@ def competition_search(session, *, linked_competition_id: int | None = None, lin
                 "judges' per-dance placements (lower is better) -- see Placement above "
                 "for the official result."
             )
-            tabulation = _labeled_marks_pivot(df, marks_tabulation_for_event(session, event.id))
             if tabulation.empty:
                 st.write("No marks on file for this event.")
             else:
@@ -1585,7 +1723,6 @@ def competition_search(session, *, linked_competition_id: int | None = None, lin
                 round_cols = [c for c in tabulation.columns if c not in ("Couple", "Placement", "Final")]
                 _grouped_bar_chart(tabulation.set_index("Couple")[round_cols], round_cols)
 
-                routine = _labeled_marks_pivot(df, marks_by_routine_for_event(session, event.id))
                 st.write("**Marks by routine and round**")
                 st.dataframe(routine, use_container_width=True, hide_index=True)
                 _download_buttons(
