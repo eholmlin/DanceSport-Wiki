@@ -827,11 +827,23 @@ def _event_summary_pdf_bytes(
                 _chart_image(_bar_chart_png(routine_df.set_index("Couple"), this_round_cols)),
             ]
 
+    footer_text = f"{competition.name} -- {event.raw_title}"
+
+    def _draw_footer(canvas, doc):
+        # Every page, not just the title page -- once a reader is a few
+        # pages into the routine-by-round sections, the event itself is no
+        # longer visible above the fold, per user feedback.
+        canvas.saveState()
+        canvas.setFont("Helvetica", 8)
+        canvas.setFillColor(colors.grey)
+        canvas.drawCentredString(doc.pagesize[0] / 2.0, 14, footer_text)
+        canvas.restoreState()
+
     buf = BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=landscape(letter), leftMargin=24, rightMargin=24, topMargin=24, bottomMargin=24
     )
-    doc.build(elements)
+    doc.build(elements, onFirstPage=_draw_footer, onLaterPages=_draw_footer)
     return buf.getvalue()
 
 
