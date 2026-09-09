@@ -2289,22 +2289,32 @@ def _pick_competition_event(
     of which source this side ended up using."""
     if locked is not None:
         competition, source, ref = locked
-        st.write(f"**{competition.name}**")
-        if st.button(f"Change competition {label}", key=f"{key_prefix}_unlock"):
-            for suffix in ("competition_id", "source", "ref"):
-                st.query_params.pop(f"compare_{key_prefix}_{suffix}", None)
-            st.rerun()
         if source == "results":
             event = session.get(CompEvent, int(ref))
             if event is None:
                 st.warning("That event no longer exists.")
                 return competition, pd.DataFrame(), ""
-            return competition, results_for_comp_event(session, event.id), event.raw_title
-        db_identity = _db_identity(session)
-        heat_df = heat_list_for_competition(session, db_identity, competition.id)
-        match = heat_df.loc[heat_df["_source_event_id"] == ref, "Event"] if not heat_df.empty else None
-        event_label = match.iloc[0] if match is not None and not match.empty else ref
-        return competition, _heat_list_event_roster(session, db_identity, competition.id, ref), event_label
+            event_label = event.raw_title
+            roster = results_for_comp_event(session, event.id)
+        else:
+            db_identity = _db_identity(session)
+            heat_df = heat_list_for_competition(session, db_identity, competition.id)
+            match = heat_df.loc[heat_df["_source_event_id"] == ref, "Event"] if not heat_df.empty else None
+            event_label = match.iloc[0] if match is not None and not match.empty else ref
+            roster = _heat_list_event_roster(session, db_identity, competition.id, ref)
+        # A "Compare this event" click switches this page into Compare
+        # Events mode with this side already filled in -- but that switch
+        # alone looks nearly identical to standing still (same layout,
+        # no distinct "you've arrived" page), which caused a real report
+        # of "the button doesn't do anything" when it had actually worked
+        # every time. Spelling it out removes the ambiguity.
+        st.success(f"**Competition {label}:** **{event_label}** at **{competition.name}** — pick Competition B below to compare it against.")
+        st.write(f"**{competition.name}**")
+        if st.button(f"Change competition {label}", key=f"{key_prefix}_unlock"):
+            for suffix in ("competition_id", "source", "ref"):
+                st.query_params.pop(f"compare_{key_prefix}_{suffix}", None)
+            st.rerun()
+        return competition, roster, event_label
 
     term = st.text_input(f"Competition {label}", "", key=f"{key_prefix}_term")
     if not term:
