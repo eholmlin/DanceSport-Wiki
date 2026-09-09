@@ -1365,6 +1365,100 @@ def marks_detail_with_totals(df: pd.DataFrame) -> pd.DataFrame:
     return pd.concat(blocks, ignore_index=True)
 
 
+def marks_by_judge_grid(marks_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """One Judge x Dance grid per non-Final round for a couple's marks --
+    cell is "Y" if that judge marked (recalled) the couple in that dance,
+    "N" otherwise. The existing per-mark detail table (marks_detail_with_
+    totals) has the same raw data, but as one row per mark it takes real
+    scanning to notice a pattern like "this judge never marked us" or
+    "everyone but the panel is cool on Rumba" -- a grid puts a judge's
+    whole round, or a dance's whole panel, in one glance. Per user
+    request: "which judges marked a routine and which didn't, to look
+    for trends."
+
+    Final excluded -- its marks are a per-dance placement, not a yes/no
+    recall, so "marked or not" doesn't apply.
+
+    Each grid carries a trailing "Marked" tally column (how many of this
+    round's dances that judge marked the couple in) and a trailing
+    "Marked" tally row (how many of the panel marked the couple in that
+    dance) -- the two directions a trend actually shows up in."""
+    if marks_df.empty:
+        return {}
+    non_final = marks_df[~marks_df["_is_placement"]]
+    if non_final.empty:
+        return {}
+    grids: dict[str, pd.DataFrame] = {}
+    for round_name, round_group in non_final.groupby("Round", sort=False):
+        dances = sorted(round_group["Dance"].unique(), key=_dance_sort_key)
+        pivot = round_group.pivot_table(index="Judge", columns="Dance", values="_numeric", aggfunc="first")
+        pivot = pivot.reindex(columns=dances).sort_index()
+        grid = pivot.map(lambda v: "Y" if v == 1 else "N")
+        grid.insert(len(grid.columns), "Marked", [f"{int(row.sum())}/{len(dances)}" for _, row in pivot.iterrows()])
+        panel_size = len(pivot.index)
+        totals_row = [f"{int(pivot[d].sum())}/{panel_size}" for d in dances] + [""]
+        grid.loc["Marked"] = totals_row
+        grid.index.name = "Judge"
+        grids[round_name] = grid
+    return grids
+
+
+def _style_marks_grid(grid: pd.DataFrame):
+    """Black/light-gray cell shading on top of marks_by_judge_grid's Y/N
+    grid -- plain text alone still makes a couple hunt row by row for a
+    pattern; a solid, high-contrast block per cell turns "this judge's
+    row is mostly gray" into something you notice without reading a
+    single cell. Per user request.
+
+    Rendered via st.table (not st.dataframe): st.dataframe's interactive
+    grid only honors background-color/color/font-weight from a Styler,
+    silently dropping text-align, which left the Y/N left-stuck to each
+    cell's edge instead of centered -- a real report. st.table renders
+    plain HTML instead, which respects the centering -- text-align here
+    needs !important, though, since Streamlit's own default table CSS
+    sets it too and (being a same-origin !important rule) would
+    otherwise beat a plain inline style regardless of specificity.
+
+    Columns are also given fixed, equal widths (the Judge column wider)
+    with header text allowed to wrap -- left to auto-size, a long dance
+    title like "Int'l Viennese Waltz" stretched its own column wider than
+    the rest, making the grid look ragged instead of a clean table. Per
+    user request. White borders (rather than a plain grid line) make
+    each cell read as its own block against its neighbors, since the
+    black/gray fills now run edge to edge."""
+    dance_cols = [c for c in grid.columns if c != "Marked"]
+
+    def _style(value):
+        if value == "Y":
+            return (
+                "background-color: #000000; color: #ffffff; font-weight: 900; font-size: 1.15em; "
+                "text-align: center !important;"
+            )
+        if value == "N":
+            return (
+                "background-color: #d3d3d3; color: #000000; font-weight: 900; font-size: 1.15em; "
+                "text-align: center !important;"
+            )
+        return "text-align: center !important;"
+
+    judge_col_width = 22  # percent
+    other_col_width = (100 - judge_col_width) / len(grid.columns)
+    table_styles = [
+        {"selector": "table", "props": "table-layout: fixed; width: 100%; border-collapse: collapse;"},
+        {
+            "selector": "th, td",
+            "props": "text-align: center !important; white-space: normal; word-wrap: break-word; "
+            "padding: 4px; border: 1px solid #ffffff;",
+        },
+        {"selector": "th.row_heading, th.blank", "props": f"width: {judge_col_width}%; text-align: left !important;"},
+    ]
+    for i in range(len(grid.columns)):
+        table_styles.append(
+            {"selector": f"th.col_heading.level0.col{i}, td.col{i}", "props": f"width: {other_col_width:.2f}%;"}
+        )
+    return grid.style.map(_style, subset=dance_cols).set_table_styles(table_styles)
+
+
 def _skating_system_rank(votes_by_competitor: dict[int, list[int]]) -> dict[int, int]:
     """The Skating System / majority-rule algorithm real judged finals
     (NDCA, WDSF, figure skating) actually use to turn ordinal per-judge
@@ -1891,6 +1985,19 @@ def competition_search(session, *, linked_competition_id: int | None = None, lin
             mcols[1].dataframe(dance_totals, use_container_width=True, hide_index=True)
             mcols[2].write("**Totals by judge**")
             mcols[2].dataframe(judge_totals, use_container_width=True, hide_index=True)
+
+            grids = marks_by_judge_grid(marks_df)
+            if grids:
+                st.write("**Which judges marked this couple, by round**")
+                st.caption(
+                    "Y (black) = marked (recalled) this couple in that dance, N (gray) = did not. "
+                    "\"Marked\" totals show how many of the round's dances a judge marked this "
+                    "couple in, and how many of the panel marked the couple in that dance. "
+                    "Final excluded -- its marks are placements, not a yes/no recall."
+                )
+                for round_name, grid in grids.items():
+                    st.write(f"*{round_name}*")
+                    st.table(_style_marks_grid(grid))
 
             with st.expander("Full marks detail (every judge, every dance, every round)"):
                 detail_df = marks_detail_with_totals(marks_df)
