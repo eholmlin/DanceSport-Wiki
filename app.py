@@ -2122,17 +2122,23 @@ def competition_search(session, *, linked_competition_id: int | None = None, lin
                     if not any(not g.empty for g in merged_grids.values()):
                         st.write("No judges' marks on file for these couples.")
                     else:
+                        # Repeated above every round's table (not just once
+                        # at the top of the section) -- per user request,
+                        # so the A/B/... key is right there for reference
+                        # without scrolling back up past however many
+                        # rounds came before it.
                         legend = "  ".join(
                             f"**{_couple_grid_label(i)}** = {couple}" for i, couple in enumerate(compare_choices)
                         )
                         st.caption(
-                            f"{legend}. Y (black) = marked (recalled) that couple in that dance, N (gray) = did "
-                            "not. Final excluded -- its marks are placements, not a yes/no recall."
+                            "Y (black) = marked (recalled) that couple in that dance, N (gray) = did not. Final "
+                            "excluded -- its marks are placements, not a yes/no recall."
                         )
                         for round_name, grid in merged_grids.items():
                             if grid.empty:
                                 continue
                             st.write(f"**{round_name}**")
+                            st.caption(legend)
                             st.table(_style_merged_marks_grid(grid, group_size=len(compare_choices)))
 
         st.subheader("Judges' marks")
