@@ -1459,6 +1459,139 @@ def _style_marks_grid(grid: pd.DataFrame):
     return grid.style.map(_style, subset=dance_cols).set_table_styles(table_styles)
 
 
+def marks_by_judge_grid_merged(
+    grids_by_couple: dict[str, dict[str, pd.DataFrame]], couples: list[str]
+) -> dict[str, pd.DataFrame]:
+    """One Judge x Dance grid per round like marks_by_judge_grid, but
+    merging every compared couple into a single table instead of one
+    table per couple -- each dance becomes a group of sub-columns, one
+    per couple (labeled A/B/... -- see the caller for the legend mapping
+    letters back to names), so the couples being compared sit right next
+    to each other under the same dance header and can be read without
+    shifting between tables. Colored text per couple was tried first, but
+    that would have collided with the black/gray Y/N shading itself
+    (see _style_marks_grid) -- keeping each sub-cell its own full-shaded
+    cell, just packed side by side, preserves both signals at once. Per
+    user request.
+
+    couples fixes the column order (and A/B/... assignment) -- dict
+    iteration order alone would follow insertion, not necessarily the
+    anchor-first order the caller wants."""
+    rounds_present: list[str] = []
+    for couple_grids in grids_by_couple.values():
+        for round_name in couple_grids:
+            if round_name not in rounds_present:
+                rounds_present.append(round_name)
+
+    merged: dict[str, pd.DataFrame] = {}
+    for round_name in rounds_present:
+        judges: list[str] = []
+        dances: list[str] = []
+        for couple in couples:
+            grid = grids_by_couple[couple].get(round_name)
+            if grid is None:
+                continue
+            for j in grid.index:
+                if j != "Marked" and j not in judges:
+                    judges.append(j)
+            for d in grid.columns:
+                if d != "Marked" and d not in dances:
+                    dances.append(d)
+        if not judges or not dances:
+            merged[round_name] = pd.DataFrame()
+            continue
+
+        # Flat "Dance (A)" column labels, not a true pandas MultiIndex --
+        # st.table renders a MultiIndex column as a literal printed tuple
+        # ("Int'l Waltz", 'A') rather than a spanning grouped header, which
+        # looked broken. Same-dance sub-columns still sit next to each
+        # other in column order, so the grouping still reads visually even
+        # without an actual merged header cell.
+        labels = [_couple_grid_label(i) for i in range(len(couples))]
+        data: dict[str, list[str]] = {}
+        for dance in dances:
+            for label, couple in zip(labels, couples):
+                grid = grids_by_couple[couple].get(round_name)
+                col: list[str] = []
+                for judge in judges:
+                    value = "-"
+                    if grid is not None and judge in grid.index and dance in grid.columns:
+                        cell = grid.loc[judge, dance]
+                        if cell in ("Y", "N"):
+                            value = cell
+                    col.append(value)
+                data[f"{dance} ({label})"] = col
+        merged_df = pd.DataFrame(data, index=judges)
+        merged_df.index.name = "Judge"
+        merged[round_name] = merged_df
+    return merged
+
+
+def _couple_grid_label(i: int) -> str:
+    """A/B/.../Z/AA/AB/... -- the same base-26 letter labels spreadsheet
+    columns use, so a head-to-head with more than 26 couples (never
+    happens in practice, but the comparison itself has no cap -- see
+    "Compare couples head-to-head") still gets a distinct label instead
+    of colliding."""
+    letters = ""
+    i += 1
+    while i > 0:
+        i, remainder = divmod(i - 1, 26)
+        letters = chr(ord("A") + remainder) + letters
+    return letters
+
+
+def _style_merged_marks_grid(grid: pd.DataFrame, group_size: int, judge_col_width: int = 16):
+    """Same black/gray Y/N shading as _style_marks_grid, applied across
+    marks_by_judge_grid_merged's per-couple sub-columns -- every data
+    column is the same fixed width here (dance x couple sub-columns are
+    all equally important), so unlike _style_marks_grid there's no
+    separate "Marked" tally column to size differently.
+
+    group_size (the number of compared couples, i.e. how many
+    sub-columns make up one dance) gets a heavier white border between
+    dance groups than the plain 1px white line between a dance's own
+    sub-columns -- a uniform grid line everywhere read as one flat table
+    rather than a comparison, per user feedback. Stays white (an amber
+    accent was tried first and called excessive) -- just thicker, so the
+    extra gap it opens up is what marks "new routine" as you scan across,
+    not a color change."""
+
+    def _style(value):
+        if value == "Y":
+            return (
+                "background-color: #000000; color: #ffffff; font-weight: 900; font-size: 1.05em; "
+                "text-align: center !important;"
+            )
+        if value == "N":
+            return (
+                "background-color: #d3d3d3; color: #000000; font-weight: 900; font-size: 1.05em; "
+                "text-align: center !important;"
+            )
+        return "text-align: center !important;"
+
+    n_cols = len(grid.columns)
+    other_col_width = (100 - judge_col_width) / n_cols if n_cols else 0
+    table_styles = [
+        {"selector": "table", "props": "table-layout: fixed; width: 100%; border-collapse: collapse;"},
+        {
+            "selector": "th, td",
+            "props": "text-align: center !important; white-space: normal; word-wrap: break-word; "
+            f"padding: 3px; border: 1px solid #ffffff; width: {other_col_width:.2f}%;",
+        },
+        {"selector": "th.row_heading, th.blank", "props": f"width: {judge_col_width}%; text-align: left !important;"},
+    ]
+    if group_size > 0:
+        for i in range(group_size, n_cols, group_size):
+            table_styles.append(
+                {
+                    "selector": f"th.col_heading.level0.col{i}, td.col{i}",
+                    "props": "border-left: 6px solid #ffffff !important;",
+                }
+            )
+    return grid.style.map(_style).set_table_styles(table_styles)
+
+
 def _skating_system_rank(votes_by_competitor: dict[int, list[int]]) -> dict[int, int]:
     """The Skating System / majority-rule algorithm real judged finals
     (NDCA, WDSF, figure skating) actually use to turn ordinal per-judge
@@ -1962,6 +2095,45 @@ def competition_search(session, *, linked_competition_id: int | None = None, lin
                             c for c in compare_routine_cols if c.split(" - ", 1)[0] == compare_chart_round
                         ]
                         _grouped_bar_chart(compare_routine[compare_chart_cols], compare_chart_cols)
+
+                    # Same "which judges marked this couple" grid as the
+                    # single-couple "Judges' marks" section below, merged
+                    # into one table per round instead of one table per
+                    # couple -- per user request. Two earlier layouts were
+                    # tried first: one column-per-couple stack (scrolling
+                    # past all of couple A's rounds before ever reaching
+                    # couple B's Round 1 read as "just one couple's
+                    # marks"), and encoding each couple as colored text in
+                    # a shared cell (which collided with the black/gray
+                    # Y/N shading itself -- see _style_marks_grid). This
+                    # version instead splits each dance into one
+                    # full-shaded sub-column per couple (labeled A/B/...),
+                    # so both signals -- which couple, marked or not --
+                    # stay visible at once in a single table.
+                    st.write("**Which judges marked each couple, by round**")
+                    compare_entry_ids = dict(zip(df["Couple"], df["_entry_id"]))
+                    grids_by_couple = {
+                        couple: marks_by_judge_grid(
+                            marks_detail_for_entry(session, int(compare_entry_ids[couple]), event.id)
+                        )
+                        for couple in compare_choices
+                    }
+                    merged_grids = marks_by_judge_grid_merged(grids_by_couple, compare_choices)
+                    if not any(not g.empty for g in merged_grids.values()):
+                        st.write("No judges' marks on file for these couples.")
+                    else:
+                        legend = "  ".join(
+                            f"**{_couple_grid_label(i)}** = {couple}" for i, couple in enumerate(compare_choices)
+                        )
+                        st.caption(
+                            f"{legend}. Y (black) = marked (recalled) that couple in that dance, N (gray) = did "
+                            "not. Final excluded -- its marks are placements, not a yes/no recall."
+                        )
+                        for round_name, grid in merged_grids.items():
+                            if grid.empty:
+                                continue
+                            st.write(f"**{round_name}**")
+                            st.table(_style_merged_marks_grid(grid, group_size=len(compare_choices)))
 
         st.subheader("Judges' marks")
         couple_options = dict(zip(df["Couple"], df["_entry_id"]))
