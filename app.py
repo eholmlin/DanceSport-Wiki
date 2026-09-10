@@ -847,6 +847,88 @@ def _event_summary_pdf_bytes(
     return buf.getvalue()
 
 
+def _marks_grid_table_flowable(grid: pd.DataFrame) -> Table:
+    """PDF rendering of marks_by_judge_grid's Y/N grid, one round at a
+    time -- the same black/gray cell shading as the on-screen version
+    (see _style_marks_grid), reimplemented with reportlab's own
+    TableStyle since there's no way to reuse a pandas Styler's CSS here."""
+    header = ["Judge"] + list(grid.columns)
+    data = [header] + [[str(judge)] + [str(v) for v in grid.loc[judge]] for judge in grid.index]
+    table = Table(data, repeatRows=1)
+    style = [
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2c3e50")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTSIZE", (0, 0), (-1, -1), 7),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+        ("FONTNAME", (1, 1), (-1, -1), "Helvetica-Bold"),
+    ]
+    for row_idx, judge in enumerate(grid.index, start=1):
+        for col_idx, dance in enumerate(grid.columns, start=1):
+            value = grid.loc[judge, dance]
+            if value == "Y":
+                style.append(("BACKGROUND", (col_idx, row_idx), (col_idx, row_idx), colors.black))
+                style.append(("TEXTCOLOR", (col_idx, row_idx), (col_idx, row_idx), colors.white))
+            elif value == "N":
+                style.append(("BACKGROUND", (col_idx, row_idx), (col_idx, row_idx), colors.HexColor("#d3d3d3")))
+                style.append(("TEXTCOLOR", (col_idx, row_idx), (col_idx, row_idx), colors.black))
+    table.setStyle(TableStyle(style))
+    return table
+
+
+def _couple_marks_pdf_bytes(
+    competition: Competition,
+    event: CompEvent,
+    couple_label: str,
+    grids: dict[str, pd.DataFrame],
+    detail_df: pd.DataFrame,
+    detail_cols: list[str],
+) -> bytes:
+    """One PDF for a single couple's judges' marks: the "which judges
+    marked this couple, by round" grids (same black/gray Y/N shading as
+    on screen), then the full per-mark detail table -- per user request,
+    bringing the grid view into the couple's own downloadable report
+    rather than just the flat detail table it had before."""
+    styles = getSampleStyleSheet()
+    elements = [
+        Paragraph(f"{competition.name} -- {event.raw_title}", styles["Title"]),
+        Paragraph(couple_label, styles["Heading2"]),
+        Spacer(1, 12),
+    ]
+    if grids:
+        elements += [Paragraph("Which judges marked this couple, by round", styles["Heading2"]), Spacer(1, 6)]
+        for round_name, grid in grids.items():
+            elements += [
+                Paragraph(round_name, styles["Heading3"]),
+                Spacer(1, 4),
+                _marks_grid_table_flowable(grid),
+                Spacer(1, 12),
+            ]
+        elements.append(PageBreak())
+    elements += [
+        Paragraph("Full marks detail (every judge, every dance, every round)", styles["Heading2"]),
+        Spacer(1, 6),
+        _pdf_table_flowable(detail_df, detail_cols),
+    ]
+
+    footer_text = f"{competition.name} -- {event.raw_title} -- {couple_label}"
+
+    def _draw_footer(canvas, doc):
+        canvas.saveState()
+        canvas.setFont("Helvetica", 8)
+        canvas.setFillColor(colors.grey)
+        canvas.drawCentredString(doc.pagesize[0] / 2.0, 14, footer_text)
+        canvas.restoreState()
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=landscape(letter), leftMargin=24, rightMargin=24, topMargin=24, bottomMargin=24
+    )
+    doc.build(elements, onFirstPage=_draw_footer, onLaterPages=_draw_footer)
+    return buf.getvalue()
+
+
 def _download_buttons(
     df: pd.DataFrame, display_cols: list[str], file_stem: str, title: str, container=st, key: str | None = None
 ) -> None:
@@ -2181,11 +2263,26 @@ def competition_search(session, *, linked_competition_id: int | None = None, lin
                 detail_df = marks_detail_with_totals(marks_df)
                 detail_cols = [c for c in detail_df.columns if not c.startswith("_")]
                 st.dataframe(detail_df, use_container_width=True, hide_index=True, column_order=detail_cols)
-                _download_buttons(
-                    detail_df,
-                    detail_cols,
-                    f"{competition.name} - {event.raw_title} - {couple_choice} marks",
-                    f"{event.raw_title} -- {couple_choice}",
+                # Custom download buttons here (not _download_buttons) --
+                # the PDF needs the "which judges marked this couple" grids
+                # folded in ahead of the flat detail table (per user
+                # request), which _download_buttons' plain _table_pdf_bytes
+                # can't do.
+                file_stem = f"{competition.name} - {event.raw_title} - {couple_choice} marks".replace("/", "-")
+                marks_dl_cols = st.columns(2)
+                marks_dl_cols[0].download_button(
+                    "Download as CSV",
+                    detail_df[detail_cols].to_csv(index=False).encode("utf-8"),
+                    file_name=f"{file_stem}.csv",
+                    mime="text/csv",
+                    key=f"csv_{file_stem}",
+                )
+                marks_dl_cols[1].download_button(
+                    "Download as PDF",
+                    _couple_marks_pdf_bytes(competition, event, couple_choice, grids, detail_df, detail_cols),
+                    file_name=f"{file_stem}.pdf",
+                    mime="application/pdf",
+                    key=f"pdf_{file_stem}",
                 )
 
 
