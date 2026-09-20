@@ -124,7 +124,23 @@ def guess_style(raw_title: str) -> str | None:
     return None
 
 
-def load_competition(session: Session, staging: StagingCompetition) -> Competition:
+def load_competition(
+    session: Session, staging: StagingCompetition, *, advance_source_updated_at: bool = True
+) -> Competition:
+    """advance_source_updated_at=False for a heat-list-only load (see
+    scripts/bulk_load_ndca_heatlists.py): staging.source_updated_at comes
+    from NDCA's Publish_Dates.Results timestamp regardless of which
+    pipeline parsed it (see dsr.parse.ndca._competition_from_compyears_
+    entry), so a heat-list refresh that let it through would silently
+    advance Competition.source_updated_at to match a *results* publish it
+    never actually loaded. scripts/refresh_ndca.py's incremental check
+    then sees "already caught up" and skips loading those results forever
+    -- confirmed with Galaxy Dance Festival 2026: its heat list gets
+    refreshed daily, so the moment NDCA published its results the next
+    heat-list refresh (running before that day's results refresh) stamped
+    source_updated_at to that exact timestamp despite loading zero
+    results, and the results refresh then never noticed anything had
+    changed. Real bug, not hypothetical."""
     existing = session.scalar(
         select(Competition).where(Competition.source == staging.source, Competition.source_code == staging.source_code)
     )
@@ -139,7 +155,7 @@ def load_competition(session: Session, staging: StagingCompetition) -> Competiti
         existing.city = staging.city
         existing.country = staging.country
         existing.url = staging.url
-        if staging.source_updated_at is not None:
+        if advance_source_updated_at and staging.source_updated_at is not None:
             existing.source_updated_at = staging.source_updated_at
         return existing
     competition = Competition(
@@ -152,7 +168,7 @@ def load_competition(session: Session, staging: StagingCompetition) -> Competiti
         country=staging.country,
         sanctioning_body=staging.sanctioning_body,
         url=staging.url,
-        source_updated_at=staging.source_updated_at,
+        source_updated_at=staging.source_updated_at if advance_source_updated_at else None,
     )
     session.add(competition)
     session.flush()

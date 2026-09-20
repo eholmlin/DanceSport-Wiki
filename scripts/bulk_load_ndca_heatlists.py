@@ -82,7 +82,14 @@ def load_one_competition(fetcher: PoliteFetcher, session, cyi: str) -> int:
         return 0
     save_raw_document(session, source=SOURCE, url=meta_url, content=meta_resp.content, http_status=meta_resp.status_code)
     competition_staging = parse_competition(meta_resp.content)
-    competition = load_competition(session, competition_staging)
+    # advance_source_updated_at=False -- this pipeline only ever loads the
+    # heat list, never results, so it must not advance the same
+    # source_updated_at field scripts/refresh_ndca.py relies on to detect
+    # unsynced results (see load_competition's own docstring for the bug
+    # this caused: Galaxy Dance Festival 2026's results silently never
+    # got picked up because the heat-list refresh had already stamped
+    # this competition as "caught up" the moment NDCA published them).
+    competition = load_competition(session, competition_staging, advance_source_updated_at=False)
 
     roster_url = f"{BASE}/feed/heatlists/?cyi={cyi}"
     roster_resp = fetcher.get(roster_url)
