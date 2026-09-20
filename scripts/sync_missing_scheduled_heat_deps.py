@@ -1,13 +1,17 @@
 """One-off fix: production's scheduled_heat sync failed with a
 ForeignKeyViolation because today's newly-loaded heat lists reference
-partnerships (and possibly people) created locally since the last full
-sync, which production doesn't have yet.
+partnerships (and possibly people), or entire competitions, created
+locally since the last full sync, which production doesn't have yet --
+a heat-list-only competition (no results yet, e.g. one whose heat list
+was just published) never gets a production Competition row any other
+way, since that only happens via sync_results_to_production.py's own
+upsert for competitions that already have results.
 
 Unlike migrate_sqlite_to_postgres.py, this does NOT truncate anything --
-it only inserts the specific person/partnership rows that scheduled_heat
-needs but production is missing, then re-runs the scheduled_heat sync
-(which is a full truncate+reload of that one table, safe since nothing
-depends on scheduled_heat).
+it only inserts the specific competition/person/partnership rows that
+scheduled_heat needs but production is missing, then re-runs the
+scheduled_heat sync (which is a full truncate+reload of that one table,
+safe since nothing depends on scheduled_heat).
 
 Usage:
     DSR_DATABASE_URL=postgresql://... .venv/bin/python scripts/sync_missing_scheduled_heat_deps.py
@@ -22,7 +26,7 @@ from sqlalchemy import create_engine, insert, select, text
 from sqlalchemy.orm import sessionmaker
 
 from dsr.db import DEFAULT_DB_PATH
-from dsr.models import Person, Partnership, ScheduledHeat
+from dsr.models import Competition, Person, Partnership, ScheduledHeat
 
 
 def main() -> None:
@@ -33,6 +37,27 @@ def main() -> None:
     sqlite_engine = create_engine(f"sqlite:///{DEFAULT_DB_PATH}")
     sqlite_session = sessionmaker(bind=sqlite_engine, future=True)()
     pg_engine = create_engine(pg_url, future=True)
+
+    local_competition_ids = {
+        row[0] for row in sqlite_session.execute(select(ScheduledHeat.competition_id).distinct()).all()
+    }
+    with pg_engine.connect() as pg_conn:
+        existing_competition_ids = {
+            row[0] for row in pg_conn.execute(text("select id from competition")).all()
+        }
+    missing_competition_ids = local_competition_ids - existing_competition_ids
+    print(f"{len(missing_competition_ids)} competitions referenced by scheduled_heat are missing in production")
+
+    if missing_competition_ids:
+        missing_competitions = sqlite_session.execute(
+            select(Competition).where(Competition.id.in_(missing_competition_ids))
+        ).scalars().all()
+        payload = [
+            {c.name: getattr(comp, c.name) for c in Competition.__table__.columns} for comp in missing_competitions
+        ]
+        with pg_engine.begin() as pg_conn:
+            pg_conn.execute(insert(Competition.__table__), payload)
+        print(f"Inserted {len(payload)} missing competition rows.")
 
     local_partnership_ids = {
         row[0] for row in sqlite_session.execute(select(ScheduledHeat.partnership_id)).all()
