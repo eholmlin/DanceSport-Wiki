@@ -2363,7 +2363,16 @@ def heat_list_search(session, *, linked_competition_id: int | None = None, linke
     number_cols = st.columns(2)
     heat_number_filter = number_cols[0].text_input("Filter by heat number", "", help="Exact match, e.g. '12'")
     couple_number_filter = number_cols[1].text_input("Filter by couple number", "", help="Exact match, e.g. '507'")
-    hide_danced = st.checkbox("Hide heats already danced", value=True)
+    # Defaults unchecked when arriving via a "View event" link -- that
+    # link's whole point is to show this one event's roster, but "View
+    # event" opens a fresh tab (see main()'s own comment on why), so
+    # every filter including this one is back at its plain default on
+    # arrival. An event that's already fully danced (a real case: Galaxy
+    # Dance Festival's Youth Latin, checked days after it ran) then had
+    # every single one of its rows hidden, leaving "0 of N scheduled
+    # heats" -- the link looked broken even though it worked correctly.
+    # Manual browsing (no linked_event_id) keeps the previous default.
+    hide_danced = st.checkbox("Hide heats already danced", value=(linked_event_id is None))
 
     filtered = df
     if name_filter:
