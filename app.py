@@ -929,6 +929,50 @@ def _couple_marks_pdf_bytes(
     return buf.getvalue()
 
 
+def _compare_total_marks_pdf_bytes(
+    competition: Competition, event: CompEvent, compare_tab: pd.DataFrame, round_cols: list[str]
+) -> bytes:
+    """PDF of the head-to-head "Total marks by round" section: the table and
+    its bar chart. compare_tab is indexed by couple (the compared couples,
+    anchor first) with a Placement column, one column per round, and Final.
+
+    Couples run down the rows here, not across the columns the way the
+    on-screen table is transposed -- side by side suits a narrow web column,
+    but a long couple name per column overflows a landscape page after three
+    or four couples, and this comparison has no cap. Same shape as the event
+    summary report's own marks tabulation table. Per user request."""
+    styles = getSampleStyleSheet()
+    elements = [
+        Paragraph(f"{competition.name} -- {event.raw_title}", styles["Title"]),
+        Paragraph("Head-to-head: total marks by round", styles["Heading2"]),
+        Paragraph(
+            "Non-Final columns: total judges' marks that round (higher is better). Final: sum of judges' "
+            "per-dance placements (lower is better), so it is left out of the chart.",
+            styles["Italic"],
+        ),
+        Spacer(1, 8),
+        _pdf_table_flowable(compare_tab.reset_index()),
+    ]
+    if round_cols:
+        elements += [Spacer(1, 12), _chart_image(_bar_chart_png(compare_tab[round_cols], round_cols))]
+
+    footer_text = f"{competition.name} -- {event.raw_title}"
+
+    def _draw_footer(canvas, doc):
+        canvas.saveState()
+        canvas.setFont("Helvetica", 8)
+        canvas.setFillColor(colors.grey)
+        canvas.drawCentredString(doc.pagesize[0] / 2.0, 14, footer_text)
+        canvas.restoreState()
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=landscape(letter), leftMargin=24, rightMargin=24, topMargin=24, bottomMargin=24
+    )
+    doc.build(elements, onFirstPage=_draw_footer, onLaterPages=_draw_footer)
+    return buf.getvalue()
+
+
 def _download_buttons(
     df: pd.DataFrame, display_cols: list[str], file_stem: str, title: str, container=st, key: str | None = None
 ) -> None:
@@ -2161,6 +2205,13 @@ def competition_search(session, *, linked_competition_id: int | None = None, lin
                     # direction (lower is better) from every other round.
                     compare_round_cols = [c for c in compare_tab.columns if c not in ("Placement", "Final")]
                     _grouped_bar_chart(compare_tab[compare_round_cols], compare_round_cols)
+                    st.download_button(
+                        "Export total marks by round (PDF)",
+                        _compare_total_marks_pdf_bytes(competition, event, compare_tab, compare_round_cols),
+                        file_name=f"{competition.name} - {event.raw_title} - head-to-head total marks.pdf".replace("/", "-"),
+                        mime="application/pdf",
+                        key=f"compare_total_marks_pdf_{event.id}",
+                    )
 
                     compare_routine = routine.set_index("Couple").loc[compare_choices]
                     st.write("**Marks by routine and round**")
