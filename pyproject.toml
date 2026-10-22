@@ -32,6 +32,13 @@ app = [
 ]
 postgres = [
     "psycopg2-binary>=2.9",
+    # Both drivers, not just one: SQLAlchemy picks the driver from the URL's
+    # scheme (plain postgresql:// -> psycopg2, postgresql+psycopg:// ->
+    # psycopg v3), and the deployed DSR_DATABASE_URL secret named v3 while
+    # only v2 was installed -- the whole app crashed on startup with
+    # "ModuleNotFoundError: No module named 'psycopg'" the first time
+    # Streamlit Cloud rebuilt its environment.
+    "psycopg[binary]>=3.2",
 ]
 
 [tool.setuptools.packages.find]
