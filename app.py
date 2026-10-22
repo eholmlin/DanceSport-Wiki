@@ -2017,6 +2017,8 @@ def competition_search(session, *, linked_competition_id: int | None = None, lin
             f"<div style='margin-top:-0.75rem;font-size:1.05rem'>{escape(subtitle)}</div>",
             unsafe_allow_html=True,
         )
+    if competition.source == "cre8tive":
+        st.caption(f"Results published by the organizers on [Cre8tive Score]({competition.url}).")
 
     events = events_for_competition(session, competition.id)
     if not events:

@@ -95,6 +95,17 @@ class StagingMark:
 
 
 @dataclass
+class StagingHesitation:
+    """A judge's "hesitation" flag on one couple in one recall round/dance
+    (Cre8tive Score only) -- see dsr.models.MarkHesitation."""
+
+    round_label: str
+    competitor_no: str
+    judge_letter: str
+    dance: Optional[str]
+
+
+@dataclass
 class StagingScheduledHeat:
     """One couple's scheduled slot at an upcoming/in-progress competition
     -- see dsr.models.ScheduledHeat for why this stays separate from the

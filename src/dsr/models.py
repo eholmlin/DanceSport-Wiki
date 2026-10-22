@@ -208,6 +208,24 @@ class Mark(Base):
     placement: Mapped[Optional[int]]
 
 
+class MarkHesitation(Base):
+    """A judge flagged a couple in a recall round without (necessarily)
+    recalling them -- Cre8tive Score's per-judge `hesitations` lists. Kept
+    out of `mark` on purpose: the source doesn't document what the flag
+    means (it doesn't count toward a couple's recall total, and only some
+    flagged couples are also picks), so it is stored as a separate, additive
+    fact keyed like a mark rather than overloading recalled/placement."""
+
+    __tablename__ = "mark_hesitation"
+    __table_args__ = (UniqueConstraint("round_id", "entry_id", "judge_person_id", "dance"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    round_id: Mapped[int] = mapped_column(ForeignKey("round.id"))
+    entry_id: Mapped[int] = mapped_column(ForeignKey("entry.id"), index=True)
+    judge_person_id: Mapped[int] = mapped_column(ForeignKey("person.id"))
+    dance: Mapped[Optional[str]]
+
+
 class Result(Base):
     __tablename__ = "result"
 

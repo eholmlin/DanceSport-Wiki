@@ -1,0 +1,345 @@
+{
+ "source": "cre8tive",
+ "competitionId": "2026105-international-dance-festival-2026-monday-dc47a543",
+ "kind": "competitors",
+ "data": [
+  {
+   "updatedAt": 1791241457859,
+   "competitorId": "1790855226903-comp-0-M001-1",
+   "competitor": {
+    "id": "1790855226903-comp-0-M001-1",
+    "sku": "M001",
+    "categoryName": "Int Ballroom - U10",
+    "bibNumber": "1",
+    "name": "NIKITA VASILEV AND DIANA NAGAITSEVA",
+    "representingUnit": "",
+    "language": "en"
+   }
+  },
+  {
+   "updatedAt": 1791241457859,
+   "competitorId": "1790855226903-comp-1-M001-2",
+   "competitor": {
+    "id": "1790855226903-comp-1-M001-2",
+    "sku": "M001",
+    "categoryName": "Int Ballroom - U10",
+    "bibNumber": "2",
+    "name": "IVAN NAKHLUPIN AND ADELYN ZAPOLSKYI",
+    "representingUnit": "",
+    "language": "en"
+   }
+  },
+  {
+   "updatedAt": 1791241457859,
+   "competitorId": "1790855226903-comp-240-M006-37",
+   "competitor": {
+    "id": "1790855226903-comp-240-M006-37",
+    "sku": "M006",
+    "categoryName": "Int Ballroom - O50",
+    "bibNumber": "37",
+    "name": "DOMENICO MAZZAGLIA AND GIUSEPPINA BORGONOVO",
+    "representingUnit": "",
+    "language": "en"
+   }
+  },
+  {
+   "updatedAt": 1791241457859,
+   "competitorId": "1790855226903-comp-2-M001-3",
+   "competitor": {
+    "id": "1790855226903-comp-2-M001-3",
+    "sku": "M001",
+    "categoryName": "Int Ballroom - U10",
+    "bibNumber": "3",
+    "name": "VAKARIS ARNASIUS AND FLORA STAUNTON",
+    "representingUnit": "",
+    "language": "en"
+   }
+  },
+  {
+   "updatedAt": 1791241457859,
+   "competitorId": "1790855226903-comp-224-M006-21",
+   "competitor": {
+    "id": "1790855226903-comp-224-M006-21",
+    "sku": "M006",
+    "categoryName": "Int Ballroom - O50",
+    "bibNumber": "21",
+    "name": "PETER WAKEFIELD AND TERESA HARDY",
+    "representingUnit": "",
+    "language": "en"
+   }
+  },
+  {
+   "updatedAt": 1791241457859,
+   "competitorId": "1790855226903-comp-225-M006-22",
+   "competitor": {
+    "id": "1790855226903-comp-225-M006-22",
+    "sku": "M006",
+    "categoryName": "Int Ballroom - O50",
+    "bibNumber": "22",
+    "name": "THOMAS LANGKAVEL AND SABINE HAAS",
+    "representingUnit": "",
+    "language": "en"
+   }
+  },
+  {
+   "updatedAt": 1791241457859,
+   "competitorId": "1790855226903-comp-226-M006-23",
+   "competitor": {
+    "id": "1790855226903-comp-226-M006-23",
+    "sku": "M006",
+    "categoryName": "Int Ballroom - O50",
+    "bibNumber": "23",
+    "name": "ADAM NIERADZIK AND ANNA NIERADZIK",
+    "representingUnit": "",
+    "language": "en"
+   }
+  },
+  {
+   "updatedAt": 1791241457859,
+   "competitorId": "1790855226903-comp-227-M006-24",
+   "competitor": {
+    "id": "1790855226903-comp-227-M006-24",
+    "sku": "M006",
+    "categoryName": "Int Ballroom - O50",
+    "bibNumber": "24",
+    "name": "PHIL HOLDING AND MELINA HARRISON",
+    "representingUnit": "",
+    "language": "en"
+   }
+  },
+  {
+   "updatedAt": 1791241457859,
+   "competitorId": "1790855226903-comp-228-M006-25",
+   "competitor": {
+    "id": "1790855226903-comp-228-M006-25",
+    "sku": "M006",
+    "categoryName": "Int Ballroom - O50",
+    "bibNumber": "25",
+    "name": "NEIL FORBES AND ALISON FORBES",
+    "representingUnit": "",
+    "language": "en"
+   }
+  },
+  {
+   "updatedAt": 1791241457859,
+   "competitorId": "1790855226903-comp-229-M006-26",
+   "competitor": {
+    "id": "1790855226903-comp-229-M006-26",
+    "sku": "M006",
+    "categoryName": "Int Ballroom - O50",
+    "bibNumber": "26",
+    "name": "CHRISTIAAN ROSELAAR AND NELLEKE BOOSMAN",
+    "representingUnit": "",
+    "language": "en"
+   }
+  },
+  {
+   "updatedAt": 1791241457859,
+   "competitorId": "1790855226903-comp-230-M006-27",
+   "competitor": {
+    "id": "1790855226903-comp-230-M006-27",
+    "sku": "M006",
+    "categoryName": "Int Ballroom - O50",
+    "bibNumber": "27",
+    "name": "GRAHAM SIMPSON AND KRISTINA ZOE DOWNING",
+    "representingUnit": "",
+    "language": "en"
+   }
+  },
+  {
+   "updatedAt": 1791241457859,
+   "competitorId": "1790855226903-comp-231-M006-28",
+   "competitor": {
+    "id": "1790855226903-comp-231-M006-28",
+    "sku": "M006",
+    "categoryName": "Int Ballroom - O50",
+    "bibNumber": "28",
+    "name": "DAN BAXTER AND AILEEN CARROLL-TURNER",
+    "representingUnit": "",
+    "language": "en"
+   }
+  },
+  {
+   "updatedAt": 1791241457859,
+   "competitorId": "1790855226903-comp-232-M006-29",
+   "competitor": {
+    "id": "1790855226903-comp-232-M006-29",
+    "sku": "M006",
+    "categoryName": "Int Ballroom - O50",
+    "bibNumber": "29",
+    "name": "MONICA CAVAGNI AND GABRIELE PICCHIONI",
+    "representingUnit": "",
+    "language": "en"
+   }
+  },
+  {
+   "updatedAt": 1791241457859,
+   "competitorId": "1790855226903-comp-233-M006-30",
+   "competitor": {
+    "id": "1790855226903-comp-233-M006-30",
+    "sku": "M006",
+    "categoryName": "Int Ballroom - O50",
+    "bibNumber": "30",
+    "name": "NIKOLAI CHEREMISIN AND EKATERINA DUKHOVSKAIA",
+    "representingUnit": "",
+    "language": "en"
+   }
+  },
+  {
+   "updatedAt": 1791241457859,
+   "competitorId": "1790855226903-comp-234-M006-31",
+   "competitor": {
+    "id": "1790855226903-comp-234-M006-31",
+    "sku": "M006",
+    "categoryName": "Int Ballroom - O50",
+    "bibNumber": "31",
+    "name": "ANDREY IVANOV AND ANNA IVANOVA",
+    "representingUnit": "",
+    "language": "en"
+   }
+  },
+  {
+   "updatedAt": 1791241457859,
+   "competitorId": "1790855226903-comp-235-M006-32",
+   "competitor": {
+    "id": "1790855226903-comp-235-M006-32",
+    "sku": "M006",
+    "categoryName": "Int Ballroom - O50",
+    "bibNumber": "32",
+    "name": "NIGEL CHIU AND ROBIN YAO",
+    "representingUnit": "",
+    "language": "en"
+   }
+  },
+  {
+   "updatedAt": 1791241457859,
+   "competitorId": "1790855226903-comp-236-M006-33",
+   "competitor": {
+    "id": "1790855226903-comp-236-M006-33",
+    "sku": "M006",
+    "categoryName": "Int Ballroom - O50",
+    "bibNumber": "33",
+    "name": "SERGE QUAZZOTTI AND PEGGY QUAZZOTTI",
+    "representingUnit": "",
+    "language": "en"
+   }
+  },
+  {
+   "updatedAt": 1791241457859,
+   "competitorId": "1790855226903-comp-237-M006-34",
+   "competitor": {
+    "id": "1790855226903-comp-237-M006-34",
+    "sku": "M006",
+    "categoryName": "Int Ballroom - O50",
+    "bibNumber": "34",
+    "name": "RALF LAEMMERMAIER AND STELLA LAEMMERMAIER",
+    "representingUnit": "",
+    "language": "en"
+   }
+  },
+  {
+   "updatedAt": 1791241457859,
+   "competitorId": "1790855226903-comp-238-M006-35",
+   "competitor": {
+    "id": "1790855226903-comp-238-M006-35",
+    "sku": "M006",
+    "categoryName": "Int Ballroom - O50",
+    "bibNumber": "35",
+    "name": "RICO ROSIMA AND BRENDA SNG",
+    "representingUnit": "",
+    "language": "en"
+   }
+  },
+  {
+   "updatedAt": 1791241457859,
+   "competitorId": "1790855226903-comp-239-M006-36",
+   "competitor": {
+    "id": "1790855226903-comp-239-M006-36",
+    "sku": "M006",
+    "categoryName": "Int Ballroom - O50",
+    "bibNumber": "36",
+    "name": "KEITH CARTWRIGHT AND ALEXANDRA HADALIN",
+    "representingUnit": "",
+    "language": "en"
+   }
+  },
+  {
+   "updatedAt": 1791241457859,
+   "competitorId": "1790855226903-comp-3-M001-4",
+   "competitor": {
+    "id": "1790855226903-comp-3-M001-4",
+    "sku": "M001",
+    "categoryName": "Int Ballroom - U10",
+    "bibNumber": "4",
+    "name": "MIGUEL MARTIN ZHUROV AND DEMI FISHER",
+    "representingUnit": "",
+    "language": "en"
+   }
+  },
+  {
+   "updatedAt": 1791241457859,
+   "competitorId": "1790855226903-comp-4-M001-5",
+   "competitor": {
+    "id": "1790855226903-comp-4-M001-5",
+    "sku": "M001",
+    "categoryName": "Int Ballroom - U10",
+    "bibNumber": "5",
+    "name": "TIMOFEI LISOV AND MARIIA TOLKUNOVA",
+    "representingUnit": "",
+    "language": "en"
+   }
+  },
+  {
+   "updatedAt": 1791241457859,
+   "competitorId": "1790855226903-comp-5-M001-6",
+   "competitor": {
+    "id": "1790855226903-comp-5-M001-6",
+    "sku": "M001",
+    "categoryName": "Int Ballroom - U10",
+    "bibNumber": "6",
+    "name": "JUDE WELHAM AND FLORENCE WELHAM",
+    "representingUnit": "",
+    "language": "en"
+   }
+  },
+  {
+   "updatedAt": 1791241457859,
+   "competitorId": "1790855226903-comp-6-M001-7",
+   "competitor": {
+    "id": "1790855226903-comp-6-M001-7",
+    "sku": "M001",
+    "categoryName": "Int Ballroom - U10",
+    "bibNumber": "7",
+    "name": "OSCAR ANDERTON AND ANASTASIA BLOW",
+    "representingUnit": "",
+    "language": "en"
+   }
+  },
+  {
+   "updatedAt": 1791241457859,
+   "competitorId": "1790855226903-comp-7-M001-8",
+   "competitor": {
+    "id": "1790855226903-comp-7-M001-8",
+    "sku": "M001",
+    "categoryName": "Int Ballroom - U10",
+    "bibNumber": "8",
+    "name": "ILIA PRUSAKOV AND VALERIA PETROVSKAY",
+    "representingUnit": "",
+    "language": "en"
+   }
+  },
+  {
+   "updatedAt": 1791241457859,
+   "competitorId": "1790855226903-comp-8-M001-9",
+   "competitor": {
+    "id": "1790855226903-comp-8-M001-9",
+    "sku": "M001",
+    "categoryName": "Int Ballroom - U10",
+    "bibNumber": "9",
+    "name": "MISHA RADIUSH AND ARIEL WANG",
+    "representingUnit": "",
+    "language": "en"
+   }
+  }
+ ]
+}

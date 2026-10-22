@@ -1,0 +1,2129 @@
+{
+ "source": "cre8tive",
+ "competitionId": "2026105-international-dance-festival-2026-monday-dc47a543",
+ "kind": "result-detail",
+ "data": {
+  "eventId": "1790855226903-event-0-M001-auto-f",
+  "updatedAt": 1791546418890,
+  "event": {
+   "requiresManualReview": false,
+   "judges": "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17",
+   "pick": "-",
+   "eventNumber": 18,
+   "time": "12:42",
+   "scheduleStartSeconds": 45720,
+   "hideResultsOnScoreboard": false,
+   "rounds": "F",
+   "durationMinutes": 18,
+   "dances": "W,T,F,Q",
+   "competitors": "1,5,4,9,7,8",
+   "zone": "B",
+   "presentCompetitorIds": [
+    1,
+    4,
+    5,
+    7,
+    8,
+    9
+   ],
+   "categoryEn": "Int Ballroom - U10",
+   "sku": "M001",
+   "heat": 1,
+   "isScoringComplete": true,
+   "category": "Int Ballroom - U10",
+   "id": "1790855226903-event-0-M001-auto-f"
+  },
+  "result": {
+   "overallFinalResults": [
+    {
+     "coupleId": 5,
+     "numberLabel": "5",
+     "perDanceRanks": [
+      1,
+      1,
+      1,
+      1
+     ],
+     "totalRankSum": 4,
+     "overallFinalRank": 1,
+     "tieBreakInfo": "R9"
+    },
+    {
+     "coupleId": 1,
+     "numberLabel": "1",
+     "perDanceRanks": [
+      2,
+      3,
+      3,
+      2
+     ],
+     "totalRankSum": 10,
+     "overallFinalRank": 2,
+     "tieBreakInfo": "R11"
+    },
+    {
+     "coupleId": 8,
+     "numberLabel": "8",
+     "perDanceRanks": [
+      3,
+      2,
+      2,
+      3
+     ],
+     "totalRankSum": 10,
+     "overallFinalRank": 3,
+     "tieBreakInfo": "R11"
+    },
+    {
+     "coupleId": 9,
+     "numberLabel": "9",
+     "perDanceRanks": [
+      4,
+      4,
+      4,
+      4
+     ],
+     "totalRankSum": 16,
+     "overallFinalRank": 4,
+     "tieBreakInfo": "R9"
+    },
+    {
+     "coupleId": 7,
+     "numberLabel": "7",
+     "perDanceRanks": [
+      6,
+      6,
+      5,
+      5
+     ],
+     "totalRankSum": 22,
+     "overallFinalRank": 5,
+     "tieBreakInfo": "R11"
+    },
+    {
+     "coupleId": 4,
+     "numberLabel": "4",
+     "perDanceRanks": [
+      5,
+      5,
+      6,
+      6
+     ],
+     "totalRankSum": 22,
+     "overallFinalRank": 6,
+     "tieBreakInfo": "R11"
+    }
+   ],
+   "perDanceResults": [
+    {
+     "danceName": "W",
+     "danceIndex": 0,
+     "judges": [
+      {
+       "id": 1,
+       "name": "Morena Colagreco"
+      },
+      {
+       "id": 2,
+       "name": "Fedor Isaev"
+      },
+      {
+       "id": 3,
+       "name": "Anya Demidova"
+      },
+      {
+       "id": 4,
+       "name": "Tania Kehlet"
+      },
+      {
+       "id": 5,
+       "name": "Anastasiya Murayeva"
+      },
+      {
+       "id": 6,
+       "name": "Gavin Chow"
+      },
+      {
+       "id": 7,
+       "name": "Olga Elsbury"
+      },
+      {
+       "id": 8,
+       "name": "Marko Ilich"
+      },
+      {
+       "id": 9,
+       "name": "Svetlana Afanasieva"
+      },
+      {
+       "id": 10,
+       "name": "Tanya Panchenko"
+      },
+      {
+       "id": 11,
+       "name": "Marek Kosaty"
+      },
+      {
+       "id": 12,
+       "name": "James Prouton"
+      },
+      {
+       "id": 13,
+       "name": "Matthew Rooke"
+      },
+      {
+       "id": 14,
+       "name": "Nataliia Sianko"
+      },
+      {
+       "id": 15,
+       "name": "Hazel Newberry MBE"
+      },
+      {
+       "id": 16,
+       "name": "Monica Nigro"
+      },
+      {
+       "id": 17,
+       "name": "Denis Shuiqing"
+      }
+     ],
+     "results": [
+      {
+       "coupleId": 5,
+       "numberLabel": "5",
+       "judgeMarks": [
+        2,
+        1,
+        6,
+        1,
+        4,
+        3,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        2,
+        1,
+        2,
+        2
+       ],
+       "placementCounts": {
+        "1": 10,
+        "2": 14,
+        "3": 15,
+        "4": 16,
+        "5": 16,
+        "6": 17
+       },
+       "placementSums": {
+        "1": 10,
+        "2": 18,
+        "3": 21,
+        "4": 25,
+        "5": 25,
+        "6": 31
+       },
+       "finalRankInDance": 1,
+       "majorityRank": 1,
+       "sumOfRanksAtMajority": 10,
+       "tieBreakInfo": "R5/6",
+       "tieBreakRule": null
+      },
+      {
+       "coupleId": 1,
+       "numberLabel": "1",
+       "judgeMarks": [
+        1,
+        6,
+        2,
+        3,
+        1,
+        1,
+        2,
+        2,
+        2,
+        6,
+        3,
+        3,
+        2,
+        3,
+        6,
+        1,
+        5
+       ],
+       "placementCounts": {
+        "1": 4,
+        "2": 9,
+        "3": 13,
+        "4": 13,
+        "5": 14,
+        "6": 17
+       },
+       "placementSums": {
+        "1": 4,
+        "2": 14,
+        "3": 26,
+        "4": 26,
+        "5": 31,
+        "6": 49
+       },
+       "finalRankInDance": 2,
+       "majorityRank": 2,
+       "sumOfRanksAtMajority": 14,
+       "tieBreakInfo": "R5/6",
+       "tieBreakRule": null
+      },
+      {
+       "coupleId": 8,
+       "numberLabel": "8",
+       "judgeMarks": [
+        3,
+        5,
+        1,
+        5,
+        3,
+        2,
+        5,
+        6,
+        4,
+        2,
+        4,
+        6,
+        3,
+        4,
+        2,
+        3,
+        1
+       ],
+       "placementCounts": {
+        "1": 2,
+        "2": 5,
+        "3": 9,
+        "4": 12,
+        "5": 15,
+        "6": 17
+       },
+       "placementSums": {
+        "1": 2,
+        "2": 8,
+        "3": 20,
+        "4": 32,
+        "5": 47,
+        "6": 59
+       },
+       "finalRankInDance": 3,
+       "majorityRank": 3,
+       "sumOfRanksAtMajority": 20,
+       "tieBreakInfo": "R5/6",
+       "tieBreakRule": null
+      },
+      {
+       "coupleId": 9,
+       "numberLabel": "9",
+       "judgeMarks": [
+        4,
+        4,
+        3,
+        4,
+        2,
+        4,
+        3,
+        4,
+        6,
+        4,
+        5,
+        5,
+        6,
+        5,
+        3,
+        4,
+        3
+       ],
+       "placementCounts": {
+        "1": 0,
+        "2": 1,
+        "3": 5,
+        "4": 12,
+        "5": 15,
+        "6": 17
+       },
+       "placementSums": {
+        "1": 0,
+        "2": 2,
+        "3": 14,
+        "4": 42,
+        "5": 57,
+        "6": 69
+       },
+       "finalRankInDance": 4,
+       "majorityRank": 4,
+       "sumOfRanksAtMajority": 42,
+       "tieBreakInfo": "R5/6",
+       "tieBreakRule": null
+      },
+      {
+       "coupleId": 4,
+       "numberLabel": "4",
+       "judgeMarks": [
+        6,
+        2,
+        4,
+        2,
+        6,
+        5,
+        4,
+        3,
+        5,
+        5,
+        2,
+        2,
+        4,
+        1,
+        5,
+        5,
+        4
+       ],
+       "placementCounts": {
+        "1": 1,
+        "2": 5,
+        "3": 6,
+        "4": 10,
+        "5": 15,
+        "6": 17
+       },
+       "placementSums": {
+        "1": 1,
+        "2": 9,
+        "3": 12,
+        "4": 28,
+        "5": 53,
+        "6": 65
+       },
+       "finalRankInDance": 5,
+       "majorityRank": 4,
+       "sumOfRanksAtMajority": 28,
+       "tieBreakInfo": "R5/6",
+       "tieBreakRule": null
+      },
+      {
+       "coupleId": 7,
+       "numberLabel": "7",
+       "judgeMarks": [
+        5,
+        3,
+        5,
+        6,
+        5,
+        6,
+        6,
+        5,
+        3,
+        3,
+        6,
+        4,
+        5,
+        6,
+        4,
+        6,
+        6
+       ],
+       "placementCounts": {
+        "1": 0,
+        "2": 0,
+        "3": 3,
+        "4": 5,
+        "5": 10,
+        "6": 17
+       },
+       "placementSums": {
+        "1": 0,
+        "2": 0,
+        "3": 9,
+        "4": 17,
+        "5": 42,
+        "6": 84
+       },
+       "finalRankInDance": 6,
+       "majorityRank": null,
+       "sumOfRanksAtMajority": null,
+       "tieBreakInfo": null,
+       "tieBreakRule": null
+      }
+     ]
+    },
+    {
+     "danceName": "T",
+     "danceIndex": 1,
+     "judges": [
+      {
+       "id": 1,
+       "name": "Morena Colagreco"
+      },
+      {
+       "id": 2,
+       "name": "Fedor Isaev"
+      },
+      {
+       "id": 3,
+       "name": "Anya Demidova"
+      },
+      {
+       "id": 4,
+       "name": "Tania Kehlet"
+      },
+      {
+       "id": 5,
+       "name": "Anastasiya Murayeva"
+      },
+      {
+       "id": 6,
+       "name": "Gavin Chow"
+      },
+      {
+       "id": 7,
+       "name": "Olga Elsbury"
+      },
+      {
+       "id": 8,
+       "name": "Marko Ilich"
+      },
+      {
+       "id": 9,
+       "name": "Svetlana Afanasieva"
+      },
+      {
+       "id": 10,
+       "name": "Tanya Panchenko"
+      },
+      {
+       "id": 11,
+       "name": "Marek Kosaty"
+      },
+      {
+       "id": 12,
+       "name": "James Prouton"
+      },
+      {
+       "id": 13,
+       "name": "Matthew Rooke"
+      },
+      {
+       "id": 14,
+       "name": "Nataliia Sianko"
+      },
+      {
+       "id": 15,
+       "name": "Hazel Newberry MBE"
+      },
+      {
+       "id": 16,
+       "name": "Monica Nigro"
+      },
+      {
+       "id": 17,
+       "name": "Denis Shuiqing"
+      }
+     ],
+     "results": [
+      {
+       "coupleId": 5,
+       "numberLabel": "5",
+       "judgeMarks": [
+        2,
+        1,
+        4,
+        2,
+        4,
+        3,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        2,
+        1,
+        4,
+        4
+       ],
+       "placementCounts": {
+        "1": 9,
+        "2": 12,
+        "3": 13,
+        "4": 17,
+        "5": 17,
+        "6": 17
+       },
+       "placementSums": {
+        "1": 9,
+        "2": 15,
+        "3": 18,
+        "4": 34,
+        "5": 34,
+        "6": 34
+       },
+       "finalRankInDance": 1,
+       "majorityRank": 1,
+       "sumOfRanksAtMajority": 9,
+       "tieBreakInfo": "R5/6",
+       "tieBreakRule": null
+      },
+      {
+       "coupleId": 8,
+       "numberLabel": "8",
+       "judgeMarks": [
+        1,
+        2,
+        1,
+        3,
+        1,
+        2,
+        6,
+        5,
+        3,
+        2,
+        5,
+        6,
+        3,
+        1,
+        2,
+        3,
+        3
+       ],
+       "placementCounts": {
+        "1": 4,
+        "2": 8,
+        "3": 13,
+        "4": 13,
+        "5": 15,
+        "6": 17
+       },
+       "placementSums": {
+        "1": 4,
+        "2": 12,
+        "3": 27,
+        "4": 27,
+        "5": 37,
+        "6": 49
+       },
+       "finalRankInDance": 2,
+       "majorityRank": 3,
+       "sumOfRanksAtMajority": 27,
+       "tieBreakInfo": "R5/6",
+       "tieBreakRule": null
+      },
+      {
+       "coupleId": 1,
+       "numberLabel": "1",
+       "judgeMarks": [
+        4,
+        6,
+        3,
+        4,
+        3,
+        1,
+        3,
+        2,
+        2,
+        6,
+        2,
+        2,
+        2,
+        4,
+        5,
+        1,
+        2
+       ],
+       "placementCounts": {
+        "1": 2,
+        "2": 8,
+        "3": 11,
+        "4": 14,
+        "5": 15,
+        "6": 17
+       },
+       "placementSums": {
+        "1": 2,
+        "2": 14,
+        "3": 23,
+        "4": 35,
+        "5": 40,
+        "6": 52
+       },
+       "finalRankInDance": 3,
+       "majorityRank": 3,
+       "sumOfRanksAtMajority": 23,
+       "tieBreakInfo": "R5/6",
+       "tieBreakRule": null
+      },
+      {
+       "coupleId": 9,
+       "numberLabel": "9",
+       "judgeMarks": [
+        3,
+        4,
+        2,
+        1,
+        2,
+        4,
+        2,
+        4,
+        5,
+        4,
+        4,
+        5,
+        6,
+        5,
+        3,
+        2,
+        1
+       ],
+       "placementCounts": {
+        "1": 2,
+        "2": 6,
+        "3": 8,
+        "4": 13,
+        "5": 16,
+        "6": 17
+       },
+       "placementSums": {
+        "1": 2,
+        "2": 10,
+        "3": 16,
+        "4": 36,
+        "5": 51,
+        "6": 57
+       },
+       "finalRankInDance": 4,
+       "majorityRank": 4,
+       "sumOfRanksAtMajority": 36,
+       "tieBreakInfo": "R5/6",
+       "tieBreakRule": null
+      },
+      {
+       "coupleId": 4,
+       "numberLabel": "4",
+       "judgeMarks": [
+        6,
+        3,
+        5,
+        5,
+        5,
+        6,
+        4,
+        3,
+        6,
+        5,
+        3,
+        3,
+        4,
+        3,
+        6,
+        5,
+        6
+       ],
+       "placementCounts": {
+        "1": 0,
+        "2": 0,
+        "3": 5,
+        "4": 7,
+        "5": 12,
+        "6": 17
+       },
+       "placementSums": {
+        "1": 0,
+        "2": 0,
+        "3": 15,
+        "4": 23,
+        "5": 48,
+        "6": 78
+       },
+       "finalRankInDance": 5,
+       "majorityRank": 5,
+       "sumOfRanksAtMajority": 48,
+       "tieBreakInfo": "R5/6",
+       "tieBreakRule": null
+      },
+      {
+       "coupleId": 7,
+       "numberLabel": "7",
+       "judgeMarks": [
+        5,
+        5,
+        6,
+        6,
+        6,
+        5,
+        5,
+        6,
+        4,
+        3,
+        6,
+        4,
+        5,
+        6,
+        4,
+        6,
+        5
+       ],
+       "placementCounts": {
+        "1": 0,
+        "2": 0,
+        "3": 1,
+        "4": 4,
+        "5": 10,
+        "6": 17
+       },
+       "placementSums": {
+        "1": 0,
+        "2": 0,
+        "3": 3,
+        "4": 15,
+        "5": 45,
+        "6": 87
+       },
+       "finalRankInDance": 6,
+       "majorityRank": null,
+       "sumOfRanksAtMajority": null,
+       "tieBreakInfo": null,
+       "tieBreakRule": null
+      }
+     ]
+    },
+    {
+     "danceName": "F",
+     "danceIndex": 2,
+     "judges": [
+      {
+       "id": 1,
+       "name": "Morena Colagreco"
+      },
+      {
+       "id": 2,
+       "name": "Fedor Isaev"
+      },
+      {
+       "id": 3,
+       "name": "Anya Demidova"
+      },
+      {
+       "id": 4,
+       "name": "Tania Kehlet"
+      },
+      {
+       "id": 5,
+       "name": "Anastasiya Murayeva"
+      },
+      {
+       "id": 6,
+       "name": "Gavin Chow"
+      },
+      {
+       "id": 7,
+       "name": "Olga Elsbury"
+      },
+      {
+       "id": 8,
+       "name": "Marko Ilich"
+      },
+      {
+       "id": 9,
+       "name": "Svetlana Afanasieva"
+      },
+      {
+       "id": 10,
+       "name": "Tanya Panchenko"
+      },
+      {
+       "id": 11,
+       "name": "Marek Kosaty"
+      },
+      {
+       "id": 12,
+       "name": "James Prouton"
+      },
+      {
+       "id": 13,
+       "name": "Matthew Rooke"
+      },
+      {
+       "id": 14,
+       "name": "Nataliia Sianko"
+      },
+      {
+       "id": 15,
+       "name": "Hazel Newberry MBE"
+      },
+      {
+       "id": 16,
+       "name": "Monica Nigro"
+      },
+      {
+       "id": 17,
+       "name": "Denis Shuiqing"
+      }
+     ],
+     "results": [
+      {
+       "coupleId": 5,
+       "numberLabel": "5",
+       "judgeMarks": [
+        3,
+        1,
+        4,
+        1,
+        4,
+        3,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        2,
+        2,
+        4
+       ],
+       "placementCounts": {
+        "1": 10,
+        "2": 12,
+        "3": 14,
+        "4": 17,
+        "5": 17,
+        "6": 17
+       },
+       "placementSums": {
+        "1": 10,
+        "2": 14,
+        "3": 20,
+        "4": 32,
+        "5": 32,
+        "6": 32
+       },
+       "finalRankInDance": 1,
+       "majorityRank": 1,
+       "sumOfRanksAtMajority": 10,
+       "tieBreakInfo": "R5/6",
+       "tieBreakRule": null
+      },
+      {
+       "coupleId": 8,
+       "numberLabel": "8",
+       "judgeMarks": [
+        1,
+        2,
+        1,
+        3,
+        2,
+        2,
+        4,
+        6,
+        3,
+        4,
+        6,
+        6,
+        2,
+        2,
+        1,
+        5,
+        1
+       ],
+       "placementCounts": {
+        "1": 4,
+        "2": 9,
+        "3": 11,
+        "4": 13,
+        "5": 14,
+        "6": 17
+       },
+       "placementSums": {
+        "1": 4,
+        "2": 14,
+        "3": 20,
+        "4": 28,
+        "5": 33,
+        "6": 51
+       },
+       "finalRankInDance": 2,
+       "majorityRank": 2,
+       "sumOfRanksAtMajority": 14,
+       "tieBreakInfo": "R5/6",
+       "tieBreakRule": null
+      },
+      {
+       "coupleId": 1,
+       "numberLabel": "1",
+       "judgeMarks": [
+        2,
+        6,
+        3,
+        4,
+        1,
+        1,
+        2,
+        2,
+        2,
+        5,
+        2,
+        2,
+        3,
+        4,
+        4,
+        3,
+        3
+       ],
+       "placementCounts": {
+        "1": 2,
+        "2": 8,
+        "3": 12,
+        "4": 15,
+        "5": 16,
+        "6": 17
+       },
+       "placementSums": {
+        "1": 2,
+        "2": 14,
+        "3": 26,
+        "4": 38,
+        "5": 43,
+        "6": 49
+       },
+       "finalRankInDance": 3,
+       "majorityRank": 3,
+       "sumOfRanksAtMajority": 26,
+       "tieBreakInfo": "R5/6",
+       "tieBreakRule": null
+      },
+      {
+       "coupleId": 9,
+       "numberLabel": "9",
+       "judgeMarks": [
+        4,
+        3,
+        2,
+        2,
+        3,
+        4,
+        3,
+        3,
+        5,
+        2,
+        4,
+        3,
+        6,
+        5,
+        3,
+        1,
+        2
+       ],
+       "placementCounts": {
+        "1": 1,
+        "2": 5,
+        "3": 11,
+        "4": 14,
+        "5": 16,
+        "6": 17
+       },
+       "placementSums": {
+        "1": 1,
+        "2": 9,
+        "3": 27,
+        "4": 39,
+        "5": 49,
+        "6": 55
+       },
+       "finalRankInDance": 4,
+       "majorityRank": 3,
+       "sumOfRanksAtMajority": 27,
+       "tieBreakInfo": "R5/6",
+       "tieBreakRule": null
+      },
+      {
+       "coupleId": 7,
+       "numberLabel": "7",
+       "judgeMarks": [
+        5,
+        4,
+        5,
+        5,
+        5,
+        5,
+        6,
+        5,
+        4,
+        3,
+        5,
+        5,
+        5,
+        6,
+        5,
+        6,
+        5
+       ],
+       "placementCounts": {
+        "1": 0,
+        "2": 0,
+        "3": 1,
+        "4": 3,
+        "5": 14,
+        "6": 17
+       },
+       "placementSums": {
+        "1": 0,
+        "2": 0,
+        "3": 3,
+        "4": 11,
+        "5": 66,
+        "6": 84
+       },
+       "finalRankInDance": 5,
+       "majorityRank": 5,
+       "sumOfRanksAtMajority": 66,
+       "tieBreakInfo": "R5/6",
+       "tieBreakRule": null
+      },
+      {
+       "coupleId": 4,
+       "numberLabel": "4",
+       "judgeMarks": [
+        6,
+        5,
+        6,
+        6,
+        6,
+        6,
+        5,
+        4,
+        6,
+        6,
+        3,
+        4,
+        4,
+        3,
+        6,
+        4,
+        6
+       ],
+       "placementCounts": {
+        "1": 0,
+        "2": 0,
+        "3": 2,
+        "4": 6,
+        "5": 8,
+        "6": 17
+       },
+       "placementSums": {
+        "1": 0,
+        "2": 0,
+        "3": 6,
+        "4": 22,
+        "5": 32,
+        "6": 86
+       },
+       "finalRankInDance": 6,
+       "majorityRank": null,
+       "sumOfRanksAtMajority": null,
+       "tieBreakInfo": null,
+       "tieBreakRule": null
+      }
+     ]
+    },
+    {
+     "danceName": "Q",
+     "danceIndex": 3,
+     "judges": [
+      {
+       "id": 1,
+       "name": "Morena Colagreco"
+      },
+      {
+       "id": 2,
+       "name": "Fedor Isaev"
+      },
+      {
+       "id": 3,
+       "name": "Anya Demidova"
+      },
+      {
+       "id": 4,
+       "name": "Tania Kehlet"
+      },
+      {
+       "id": 5,
+       "name": "Anastasiya Murayeva"
+      },
+      {
+       "id": 6,
+       "name": "Gavin Chow"
+      },
+      {
+       "id": 7,
+       "name": "Olga Elsbury"
+      },
+      {
+       "id": 8,
+       "name": "Marko Ilich"
+      },
+      {
+       "id": 9,
+       "name": "Svetlana Afanasieva"
+      },
+      {
+       "id": 10,
+       "name": "Tanya Panchenko"
+      },
+      {
+       "id": 11,
+       "name": "Marek Kosaty"
+      },
+      {
+       "id": 12,
+       "name": "James Prouton"
+      },
+      {
+       "id": 13,
+       "name": "Matthew Rooke"
+      },
+      {
+       "id": 14,
+       "name": "Nataliia Sianko"
+      },
+      {
+       "id": 15,
+       "name": "Hazel Newberry MBE"
+      },
+      {
+       "id": 16,
+       "name": "Monica Nigro"
+      },
+      {
+       "id": 17,
+       "name": "Denis Shuiqing"
+      }
+     ],
+     "results": [
+      {
+       "coupleId": 5,
+       "numberLabel": "5",
+       "judgeMarks": [
+        3,
+        1,
+        4,
+        1,
+        4,
+        3,
+        1,
+        1,
+        1,
+        1,
+        2,
+        1,
+        2,
+        3,
+        3,
+        2,
+        5
+       ],
+       "placementCounts": {
+        "1": 7,
+        "2": 10,
+        "3": 14,
+        "4": 16,
+        "5": 17,
+        "6": 17
+       },
+       "placementSums": {
+        "1": 7,
+        "2": 13,
+        "3": 25,
+        "4": 33,
+        "5": 38,
+        "6": 38
+       },
+       "finalRankInDance": 1,
+       "majorityRank": 2,
+       "sumOfRanksAtMajority": 13,
+       "tieBreakInfo": "R7a",
+       "tieBreakRule": "7a"
+      },
+      {
+       "coupleId": 1,
+       "numberLabel": "1",
+       "judgeMarks": [
+        2,
+        5,
+        2,
+        5,
+        1,
+        1,
+        3,
+        2,
+        2,
+        2,
+        1,
+        2,
+        1,
+        4,
+        4,
+        4,
+        4
+       ],
+       "placementCounts": {
+        "1": 4,
+        "2": 10,
+        "3": 11,
+        "4": 15,
+        "5": 17,
+        "6": 17
+       },
+       "placementSums": {
+        "1": 4,
+        "2": 16,
+        "3": 19,
+        "4": 35,
+        "5": 45,
+        "6": 45
+       },
+       "finalRankInDance": 2,
+       "majorityRank": 2,
+       "sumOfRanksAtMajority": 16,
+       "tieBreakInfo": "R7a",
+       "tieBreakRule": "7a"
+      },
+      {
+       "coupleId": 8,
+       "numberLabel": "8",
+       "judgeMarks": [
+        1,
+        4,
+        3,
+        3,
+        3,
+        2,
+        5,
+        5,
+        4,
+        4,
+        6,
+        6,
+        3,
+        1,
+        1,
+        1,
+        1
+       ],
+       "placementCounts": {
+        "1": 5,
+        "2": 6,
+        "3": 10,
+        "4": 13,
+        "5": 15,
+        "6": 17
+       },
+       "placementSums": {
+        "1": 5,
+        "2": 7,
+        "3": 19,
+        "4": 31,
+        "5": 41,
+        "6": 53
+       },
+       "finalRankInDance": 3,
+       "majorityRank": 3,
+       "sumOfRanksAtMajority": 19,
+       "tieBreakInfo": "R5/6",
+       "tieBreakRule": null
+      },
+      {
+       "coupleId": 9,
+       "numberLabel": "9",
+       "judgeMarks": [
+        4,
+        3,
+        1,
+        2,
+        2,
+        5,
+        2,
+        4,
+        5,
+        5,
+        3,
+        5,
+        5,
+        6,
+        2,
+        3,
+        2
+       ],
+       "placementCounts": {
+        "1": 1,
+        "2": 6,
+        "3": 9,
+        "4": 11,
+        "5": 16,
+        "6": 17
+       },
+       "placementSums": {
+        "1": 1,
+        "2": 11,
+        "3": 20,
+        "4": 28,
+        "5": 53,
+        "6": 59
+       },
+       "finalRankInDance": 4,
+       "majorityRank": 3,
+       "sumOfRanksAtMajority": 20,
+       "tieBreakInfo": "R5/6",
+       "tieBreakRule": null
+      },
+      {
+       "coupleId": 7,
+       "numberLabel": "7",
+       "judgeMarks": [
+        5,
+        2,
+        5,
+        6,
+        5,
+        6,
+        6,
+        6,
+        3,
+        3,
+        5,
+        4,
+        6,
+        5,
+        5,
+        5,
+        3
+       ],
+       "placementCounts": {
+        "1": 0,
+        "2": 1,
+        "3": 4,
+        "4": 5,
+        "5": 12,
+        "6": 17
+       },
+       "placementSums": {
+        "1": 0,
+        "2": 2,
+        "3": 11,
+        "4": 15,
+        "5": 50,
+        "6": 80
+       },
+       "finalRankInDance": 5,
+       "majorityRank": 5,
+       "sumOfRanksAtMajority": 50,
+       "tieBreakInfo": "R5/6",
+       "tieBreakRule": null
+      },
+      {
+       "coupleId": 4,
+       "numberLabel": "4",
+       "judgeMarks": [
+        6,
+        6,
+        6,
+        4,
+        6,
+        4,
+        4,
+        3,
+        6,
+        6,
+        4,
+        3,
+        4,
+        2,
+        6,
+        6,
+        6
+       ],
+       "placementCounts": {
+        "1": 0,
+        "2": 1,
+        "3": 3,
+        "4": 8,
+        "5": 8,
+        "6": 17
+       },
+       "placementSums": {
+        "1": 0,
+        "2": 2,
+        "3": 8,
+        "4": 28,
+        "5": 28,
+        "6": 82
+       },
+       "finalRankInDance": 6,
+       "majorityRank": null,
+       "sumOfRanksAtMajority": null,
+       "tieBreakInfo": null,
+       "tieBreakRule": null
+      }
+     ]
+    }
+   ]
+  },
+  "eventScores": {
+   "judge_9": {
+    "hesitations": {},
+    "picks": {},
+    "scores": {
+     "0": {
+      "1": 2,
+      "4": 5,
+      "5": 1,
+      "7": 3,
+      "8": 4,
+      "9": 6
+     },
+     "1": {
+      "1": 2,
+      "4": 6,
+      "5": 1,
+      "7": 4,
+      "8": 3,
+      "9": 5
+     },
+     "2": {
+      "1": 2,
+      "4": 6,
+      "5": 1,
+      "7": 4,
+      "8": 3,
+      "9": 5
+     },
+     "3": {
+      "1": 2,
+      "4": 6,
+      "5": 1,
+      "7": 3,
+      "8": 4,
+      "9": 5
+     }
+    }
+   },
+   "judge_17": {
+    "hesitations": {},
+    "picks": {},
+    "scores": {
+     "0": {
+      "1": 5,
+      "4": 4,
+      "5": 2,
+      "7": 6,
+      "8": 1,
+      "9": 3
+     },
+     "1": {
+      "1": 2,
+      "4": 6,
+      "5": 4,
+      "7": 5,
+      "8": 3,
+      "9": 1
+     },
+     "2": {
+      "1": 3,
+      "4": 6,
+      "5": 4,
+      "7": 5,
+      "8": 1,
+      "9": 2
+     },
+     "3": {
+      "1": 4,
+      "4": 6,
+      "5": 5,
+      "7": 3,
+      "8": 1,
+      "9": 2
+     }
+    }
+   },
+   "judge_11": {
+    "picks": {},
+    "hesitations": {},
+    "scores": {
+     "0": {
+      "1": 3,
+      "4": 2,
+      "5": 1,
+      "7": 6,
+      "8": 4,
+      "9": 5
+     },
+     "1": {
+      "1": 2,
+      "4": 3,
+      "5": 1,
+      "7": 6,
+      "8": 5,
+      "9": 4
+     },
+     "2": {
+      "1": 2,
+      "4": 3,
+      "5": 1,
+      "7": 5,
+      "8": 6,
+      "9": 4
+     },
+     "3": {
+      "1": 1,
+      "4": 4,
+      "5": 2,
+      "7": 5,
+      "8": 6,
+      "9": 3
+     }
+    }
+   },
+   "judge_1": {
+    "picks": {},
+    "hesitations": {},
+    "scores": {
+     "0": {
+      "1": 1,
+      "4": 6,
+      "5": 2,
+      "7": 5,
+      "8": 3,
+      "9": 4
+     },
+     "1": {
+      "1": 4,
+      "4": 6,
+      "5": 2,
+      "7": 5,
+      "8": 1,
+      "9": 3
+     },
+     "2": {
+      "1": 2,
+      "4": 6,
+      "5": 3,
+      "7": 5,
+      "8": 1,
+      "9": 4
+     },
+     "3": {
+      "1": 2,
+      "4": 6,
+      "5": 3,
+      "7": 5,
+      "8": 1,
+      "9": 4
+     }
+    }
+   },
+   "judge_7": {
+    "hesitations": {},
+    "picks": {},
+    "scores": {
+     "0": {
+      "1": 2,
+      "4": 4,
+      "5": 1,
+      "7": 6,
+      "8": 5,
+      "9": 3
+     },
+     "1": {
+      "1": 3,
+      "4": 4,
+      "5": 1,
+      "7": 5,
+      "8": 6,
+      "9": 2
+     },
+     "2": {
+      "1": 2,
+      "4": 5,
+      "5": 1,
+      "7": 6,
+      "8": 4,
+      "9": 3
+     },
+     "3": {
+      "1": 3,
+      "4": 4,
+      "5": 1,
+      "7": 6,
+      "8": 5,
+      "9": 2
+     }
+    }
+   },
+   "judge_10": {
+    "hesitations": {},
+    "scores": {
+     "0": {
+      "1": 6,
+      "4": 5,
+      "5": 1,
+      "7": 3,
+      "8": 2,
+      "9": 4
+     },
+     "1": {
+      "1": 6,
+      "4": 5,
+      "5": 1,
+      "7": 3,
+      "8": 2,
+      "9": 4
+     },
+     "2": {
+      "1": 5,
+      "4": 6,
+      "5": 1,
+      "7": 3,
+      "8": 4,
+      "9": 2
+     },
+     "3": {
+      "1": 2,
+      "4": 6,
+      "5": 1,
+      "7": 3,
+      "8": 4,
+      "9": 5
+     }
+    },
+    "picks": {}
+   },
+   "judge_15": {
+    "hesitations": {},
+    "picks": {},
+    "scores": {
+     "0": {
+      "1": 6,
+      "4": 5,
+      "5": 1,
+      "7": 4,
+      "8": 2,
+      "9": 3
+     },
+     "1": {
+      "1": 5,
+      "4": 6,
+      "5": 1,
+      "7": 4,
+      "8": 2,
+      "9": 3
+     },
+     "2": {
+      "1": 4,
+      "4": 6,
+      "5": 2,
+      "7": 5,
+      "8": 1,
+      "9": 3
+     },
+     "3": {
+      "1": 4,
+      "4": 6,
+      "5": 3,
+      "7": 5,
+      "8": 1,
+      "9": 2
+     }
+    }
+   },
+   "judge_13": {
+    "picks": {},
+    "hesitations": {},
+    "scores": {
+     "0": {
+      "1": 2,
+      "4": 4,
+      "5": 1,
+      "7": 5,
+      "8": 3,
+      "9": 6
+     },
+     "1": {
+      "1": 2,
+      "4": 4,
+      "5": 1,
+      "7": 5,
+      "8": 3,
+      "9": 6
+     },
+     "2": {
+      "1": 3,
+      "4": 4,
+      "5": 1,
+      "7": 5,
+      "8": 2,
+      "9": 6
+     },
+     "3": {
+      "1": 1,
+      "4": 4,
+      "5": 2,
+      "7": 6,
+      "8": 3,
+      "9": 5
+     }
+    }
+   },
+   "judge_5": {
+    "picks": {},
+    "hesitations": {},
+    "scores": {
+     "0": {
+      "1": 1,
+      "4": 6,
+      "5": 4,
+      "7": 5,
+      "8": 3,
+      "9": 2
+     },
+     "1": {
+      "1": 3,
+      "4": 5,
+      "5": 4,
+      "7": 6,
+      "8": 1,
+      "9": 2
+     },
+     "2": {
+      "1": 1,
+      "4": 6,
+      "5": 4,
+      "7": 5,
+      "8": 2,
+      "9": 3
+     },
+     "3": {
+      "1": 1,
+      "4": 6,
+      "5": 4,
+      "7": 5,
+      "8": 3,
+      "9": 2
+     }
+    }
+   },
+   "judge_4": {
+    "picks": {},
+    "scores": {
+     "0": {
+      "1": 3,
+      "4": 2,
+      "5": 1,
+      "7": 6,
+      "8": 5,
+      "9": 4
+     },
+     "1": {
+      "1": 4,
+      "4": 5,
+      "5": 2,
+      "7": 6,
+      "8": 3,
+      "9": 1
+     },
+     "2": {
+      "1": 4,
+      "4": 6,
+      "5": 1,
+      "7": 5,
+      "8": 3,
+      "9": 2
+     },
+     "3": {
+      "1": 5,
+      "4": 4,
+      "5": 1,
+      "7": 6,
+      "8": 3,
+      "9": 2
+     }
+    },
+    "hesitations": {}
+   },
+   "judge_6": {
+    "scores": {
+     "0": {
+      "1": 1,
+      "4": 5,
+      "5": 3,
+      "7": 6,
+      "8": 2,
+      "9": 4
+     },
+     "1": {
+      "1": 1,
+      "4": 6,
+      "5": 3,
+      "7": 5,
+      "8": 2,
+      "9": 4
+     },
+     "2": {
+      "1": 1,
+      "4": 6,
+      "5": 3,
+      "7": 5,
+      "8": 2,
+      "9": 4
+     },
+     "3": {
+      "1": 1,
+      "4": 4,
+      "5": 3,
+      "7": 6,
+      "8": 2,
+      "9": 5
+     }
+    },
+    "picks": {},
+    "hesitations": {}
+   },
+   "judge_3": {
+    "hesitations": {},
+    "picks": {},
+    "scores": {
+     "0": {
+      "1": 2,
+      "4": 4,
+      "5": 6,
+      "7": 5,
+      "8": 1,
+      "9": 3
+     },
+     "1": {
+      "1": 3,
+      "4": 5,
+      "5": 4,
+      "7": 6,
+      "8": 1,
+      "9": 2
+     },
+     "2": {
+      "1": 3,
+      "4": 6,
+      "5": 4,
+      "7": 5,
+      "8": 1,
+      "9": 2
+     },
+     "3": {
+      "1": 2,
+      "4": 6,
+      "5": 4,
+      "7": 5,
+      "8": 3,
+      "9": 1
+     }
+    }
+   },
+   "judge_8": {
+    "scores": {
+     "0": {
+      "1": 2,
+      "4": 3,
+      "5": 1,
+      "7": 5,
+      "8": 6,
+      "9": 4
+     },
+     "1": {
+      "1": 2,
+      "4": 3,
+      "5": 1,
+      "7": 6,
+      "8": 5,
+      "9": 4
+     },
+     "2": {
+      "1": 2,
+      "4": 4,
+      "5": 1,
+      "7": 5,
+      "8": 6,
+      "9": 3
+     },
+     "3": {
+      "1": 2,
+      "4": 3,
+      "5": 1,
+      "7": 6,
+      "8": 5,
+      "9": 4
+     }
+    },
+    "picks": {},
+    "hesitations": {}
+   },
+   "judge_2": {
+    "picks": {},
+    "scores": {
+     "0": {
+      "1": 6,
+      "4": 2,
+      "5": 1,
+      "7": 3,
+      "8": 5,
+      "9": 4
+     },
+     "1": {
+      "1": 6,
+      "4": 3,
+      "5": 1,
+      "7": 5,
+      "8": 2,
+      "9": 4
+     },
+     "2": {
+      "1": 6,
+      "4": 5,
+      "5": 1,
+      "7": 4,
+      "8": 2,
+      "9": 3
+     },
+     "3": {
+      "1": 5,
+      "4": 6,
+      "5": 1,
+      "7": 2,
+      "8": 4,
+      "9": 3
+     }
+    },
+    "hesitations": {}
+   },
+   "judge_12": {
+    "scores": {
+     "0": {
+      "1": 3,
+      "4": 2,
+      "5": 1,
+      "7": 4,
+      "8": 6,
+      "9": 5
+     },
+     "1": {
+      "1": 2,
+      "4": 3,
+      "5": 1,
+      "7": 4,
+      "8": 6,
+      "9": 5
+     },
+     "2": {
+      "1": 2,
+      "4": 4,
+      "5": 1,
+      "7": 5,
+      "8": 6,
+      "9": 3
+     },
+     "3": {
+      "1": 2,
+      "4": 3,
+      "5": 1,
+      "7": 4,
+      "8": 6,
+      "9": 5
+     }
+    },
+    "picks": {},
+    "hesitations": {}
+   },
+   "judge_16": {
+    "hesitations": {},
+    "picks": {},
+    "scores": {
+     "0": {
+      "1": 1,
+      "4": 5,
+      "5": 2,
+      "7": 6,
+      "8": 3,
+      "9": 4
+     },
+     "1": {
+      "1": 1,
+      "4": 5,
+      "5": 4,
+      "7": 6,
+      "8": 3,
+      "9": 2
+     },
+     "2": {
+      "1": 3,
+      "4": 4,
+      "5": 2,
+      "7": 6,
+      "8": 5,
+      "9": 1
+     },
+     "3": {
+      "1": 4,
+      "4": 6,
+      "5": 2,
+      "7": 5,
+      "8": 1,
+      "9": 3
+     }
+    }
+   },
+   "judge_14": {
+    "picks": {},
+    "scores": {
+     "0": {
+      "1": 3,
+      "4": 1,
+      "5": 2,
+      "7": 6,
+      "8": 4,
+      "9": 5
+     },
+     "1": {
+      "1": 4,
+      "4": 3,
+      "5": 2,
+      "7": 6,
+      "8": 1,
+      "9": 5
+     },
+     "2": {
+      "1": 4,
+      "4": 3,
+      "5": 1,
+      "7": 6,
+      "8": 2,
+      "9": 5
+     },
+     "3": {
+      "1": 4,
+      "4": 2,
+      "5": 3,
+      "7": 5,
+      "8": 1,
+      "9": 6
+     }
+    },
+    "hesitations": {}
+   }
+  }
+ }
+}
