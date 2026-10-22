@@ -12,7 +12,14 @@ dependencies = [
     "tenacity>=8.2",
     "selectolax>=0.3.21",
     "beautifulsoup4>=4.12",
-    "sqlalchemy>=2.0",
+    # Capped below 2.1: SQLAlchemy 2.1 (needs Python 3.11+) changed the
+    # default driver for a plain postgresql:// URL from psycopg2 to psycopg
+    # v3. Streamlit Cloud's Python 3.14 rebuild picked up 2.1.x from this
+    # unpinned range and the app crashed at startup with "No module named
+    # 'psycopg'" -- the local venv is Python 3.9, which can't even see 2.1,
+    # so nothing here had ever run on it. Production should run the version
+    # it's actually tested on.
+    "sqlalchemy>=2.0,<2.1",
     "click>=8.1",
     "alembic>=1.13",
     "jellyfish>=1.0",
@@ -25,20 +32,16 @@ dev = [
 ]
 app = [
     "streamlit>=1.35",
-    "pandas>=2.0",
+    # pandas 3 and altair 6 (both Python 3.11+, so invisible to the local
+    # Python 3.9 venv) are major jumps the app has never run on; same
+    # reason as the SQLAlchemy cap above.
+    "pandas>=2.0,<3",
     "reportlab>=4.0",
-    "altair>=5.0",
+    "altair>=5.0,<6",
     "matplotlib>=3.8",
 ]
 postgres = [
     "psycopg2-binary>=2.9",
-    # Both drivers, not just one: SQLAlchemy picks the driver from the URL's
-    # scheme (plain postgresql:// -> psycopg2, postgresql+psycopg:// ->
-    # psycopg v3), and the deployed DSR_DATABASE_URL secret named v3 while
-    # only v2 was installed -- the whole app crashed on startup with
-    # "ModuleNotFoundError: No module named 'psycopg'" the first time
-    # Streamlit Cloud rebuilt its environment.
-    "psycopg[binary]>=3.2",
 ]
 
 [tool.setuptools.packages.find]
