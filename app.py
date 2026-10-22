@@ -627,6 +627,42 @@ def search_competitions(session, term: str, limit: int = 25) -> list[Competition
     return list(session.scalars(stmt).all())
 
 
+def _festival_heading(competition: Competition) -> str | None:
+    """"International Dance Festival 2026" for "International Dance Festival
+    2026 - Monday". Only Cre8tive Score competitions, whose day/session is
+    always the part after the last " - "."""
+    if competition.source != "cre8tive":
+        return None
+    heading, sep, _day = competition.name.rpartition(" - ")
+    return heading if sep else None
+
+
+def _festival_day_label(competition: Competition) -> str:
+    day = competition.name.rpartition(" - ")[2]
+    return f"{day} ({competition.start_date.strftime('%b')} {competition.start_date.day})" if competition.start_date else day
+
+
+def group_festival_days(competitions: list[Competition]) -> dict[str, list[Competition]]:
+    """Group the days/sessions of one festival under its shared name.
+
+    Cre8tive Score publishes each day as its own competition (its own
+    couple numbers, judges and event numbers, which is why they are stored
+    that way -- one entry per couple per competition can't hold a couple
+    who has a different number each day), so they are grouped here for
+    display only. A heading with just one competition isn't a festival and
+    is left out. Days are in date order."""
+    groups: dict[str, list[Competition]] = {}
+    for c in competitions:
+        heading = _festival_heading(c)
+        if heading:
+            groups.setdefault(heading, []).append(c)
+    return {
+        heading: sorted(days, key=lambda c: (c.start_date or dt.date.min, c.name))
+        for heading, days in groups.items()
+        if len(days) > 1
+    }
+
+
 def events_for_competition(session, competition_id: int) -> list[CompEvent]:
     stmt = (
         select(CompEvent)
@@ -1994,9 +2030,30 @@ def competition_search(session, *, linked_competition_id: int | None = None, lin
         if len(competitions) == 1:
             competition = competitions[0]
         else:
-            options = {f"{c.name} ({c.start_date}) -- id {c.id}": c for c in competitions}
-            choice = st.selectbox("Multiple matches -- pick one:", list(options.keys()))
-            competition = options[choice]
+            festivals = group_festival_days(competitions)
+            # A multi-day festival's days (each its own competition -- see
+            # group_festival_days) collapse into one heading in the list,
+            # placed where its first day would have been.
+            options: dict[str, Competition | str] = {}
+            for c in competitions:
+                heading = _festival_heading(c)
+                if heading in festivals:
+                    days = festivals[heading]
+                    label = f"{heading} ({_format_date_range(days[0].start_date, days[-1].start_date)}, {len(days)} days)"
+                    options.setdefault(label, heading)
+                else:
+                    options[f"{c.name} ({c.start_date}) -- id {c.id}"] = c
+            if len(options) == 1:
+                choice_value = next(iter(options.values()))
+            else:
+                choice_value = options[st.selectbox("Multiple matches -- pick one:", list(options.keys()))]
+            if isinstance(choice_value, str):
+                days = festivals[choice_value]
+                day_labels = {_festival_day_label(c): c for c in days}
+                st.markdown(f"**{escape(choice_value)}** -- pick a day:")
+                competition = day_labels[st.radio("Day", list(day_labels.keys()), horizontal=True, label_visibility="collapsed", key=f"festival_day_{choice_value}")]
+            else:
+                competition = choice_value
 
     date_range = _format_date_range(competition.start_date, competition.end_date)
     subtitle = ", ".join(p for p in (date_range, competition.city) if p)

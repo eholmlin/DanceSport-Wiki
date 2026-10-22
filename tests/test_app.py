@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from app import (
+    group_festival_days,
     _classify_titles,
     _highest_round_labels_for_entries,
     _ordinal,
@@ -698,3 +699,21 @@ def test_result_history_view_column_links_to_the_exact_competition_and_event(tmp
 
     df = result_history_for_partnership(session, partnership.id)
     assert df["View"].iloc[0] == f"?competition_id={competition.id}&event_id={event.id}"
+
+
+def test_festival_days_group_under_one_heading_in_date_order():
+    def comp(name, day, source="cre8tive"):
+        return Competition(source=source, source_code=name, name=name, start_date=dt.date(2026, 10, day))
+
+    thu_evening = comp("International Dance Festival 2026 - Thursday Evening", 8)
+    thu_afternoon = comp("International Dance Festival 2026 - Thursday Afternoon", 8)
+    monday = comp("International Dance Festival 2026 - Monday", 5)
+    platinum = comp("Platinum Dance Awards - Saturday 19th September 2026", 3)
+    ndca = comp("Some Star Ball - Day 2", 9, source="ndca_premier")
+
+    groups = group_festival_days([thu_evening, platinum, ndca, monday, thu_afternoon])
+
+    assert list(groups) == ["International Dance Festival 2026"]
+    assert groups["International Dance Festival 2026"] == [monday, thu_afternoon, thu_evening]
+    # a lone Cre8tive competition and non-Cre8tive names are never grouped
+    assert group_festival_days([platinum, ndca]) == {}
