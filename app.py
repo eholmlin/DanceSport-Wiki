@@ -2233,6 +2233,33 @@ def competition_search(session, *, linked_competition_id: int | None = None, lin
         if marks_df.empty:
             st.write("No judges' marks on file for this couple in this event.")
         else:
+            grids = marks_by_judge_grid(marks_df)
+            detail_df = marks_detail_with_totals(marks_df)
+            detail_cols = [c for c in detail_df.columns if not c.startswith("_")]
+            # Export sits at the top of the section, right under the couple
+            # picker -- per user request. The same CSV/PDF pair used to live
+            # at the very bottom, inside the collapsed "Full marks detail"
+            # expander, where it was easy to miss. Custom buttons rather
+            # than _download_buttons: the PDF folds the "which judges
+            # marked this couple" grids in ahead of the flat detail table,
+            # which _download_buttons' plain _table_pdf_bytes can't do.
+            file_stem = f"{competition.name} - {event.raw_title} - {couple_choice} marks".replace("/", "-")
+            marks_dl_cols = st.columns(2)
+            marks_dl_cols[0].download_button(
+                "Export this couple's marks (CSV)",
+                detail_df[detail_cols].to_csv(index=False).encode("utf-8"),
+                file_name=f"{file_stem}.csv",
+                mime="text/csv",
+                key=f"csv_{file_stem}",
+            )
+            marks_dl_cols[1].download_button(
+                "Export this couple's marks (PDF, with judge grids)",
+                _couple_marks_pdf_bytes(competition, event, couple_choice, grids, detail_df, detail_cols),
+                file_name=f"{file_stem}.pdf",
+                mime="application/pdf",
+                key=f"pdf_{file_stem}",
+            )
+
             per_dance_skating = skating_system_results_for_final(session, event.id)
             round_totals = marks_round_totals(marks_df, official_placement)
             dance_totals = marks_dance_totals(marks_df, {d: p.get(entry_id) for d, p in per_dance_skating.items()})
@@ -2246,7 +2273,6 @@ def competition_search(session, *, linked_competition_id: int | None = None, lin
             mcols[2].write("**Totals by judge**")
             mcols[2].dataframe(judge_totals, use_container_width=True, hide_index=True)
 
-            grids = marks_by_judge_grid(marks_df)
             if grids:
                 st.write("**Which judges marked this couple, by round**")
                 st.caption(
@@ -2260,30 +2286,7 @@ def competition_search(session, *, linked_competition_id: int | None = None, lin
                     st.table(_style_marks_grid(grid))
 
             with st.expander("Full marks detail (every judge, every dance, every round)"):
-                detail_df = marks_detail_with_totals(marks_df)
-                detail_cols = [c for c in detail_df.columns if not c.startswith("_")]
                 st.dataframe(detail_df, use_container_width=True, hide_index=True, column_order=detail_cols)
-                # Custom download buttons here (not _download_buttons) --
-                # the PDF needs the "which judges marked this couple" grids
-                # folded in ahead of the flat detail table (per user
-                # request), which _download_buttons' plain _table_pdf_bytes
-                # can't do.
-                file_stem = f"{competition.name} - {event.raw_title} - {couple_choice} marks".replace("/", "-")
-                marks_dl_cols = st.columns(2)
-                marks_dl_cols[0].download_button(
-                    "Download as CSV",
-                    detail_df[detail_cols].to_csv(index=False).encode("utf-8"),
-                    file_name=f"{file_stem}.csv",
-                    mime="text/csv",
-                    key=f"csv_{file_stem}",
-                )
-                marks_dl_cols[1].download_button(
-                    "Download as PDF",
-                    _couple_marks_pdf_bytes(competition, event, couple_choice, grids, detail_df, detail_cols),
-                    file_name=f"{file_stem}.pdf",
-                    mime="application/pdf",
-                    key=f"pdf_{file_stem}",
-                )
 
 
 def heat_list_search(session, *, linked_competition_id: int | None = None, linked_event_id: str | None = None) -> None:
