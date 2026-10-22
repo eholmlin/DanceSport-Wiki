@@ -1508,7 +1508,8 @@ def marks_by_judge_grid(marks_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     Each grid carries a trailing "Marked" tally column (how many of this
     round's dances that judge marked the couple in) and a trailing
     "Marked" tally row (how many of the panel marked the couple in that
-    dance) -- the two directions a trend actually shows up in."""
+    dance) -- the two directions a trend actually shows up in -- with the
+    round's overall total where the two meet, in the bottom-right corner."""
     if marks_df.empty:
         return {}
     non_final = marks_df[~marks_df["_is_placement"]]
@@ -1522,7 +1523,12 @@ def marks_by_judge_grid(marks_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         grid = pivot.map(lambda v: "Y" if v == 1 else "N")
         grid.insert(len(grid.columns), "Marked", [f"{int(row.sum())}/{len(dances)}" for _, row in pivot.iterrows()])
         panel_size = len(pivot.index)
-        totals_row = [f"{int(pivot[d].sum())}/{panel_size}" for d in dances] + [""]
+        # Bottom-right corner: the round's overall total (every judge x every
+        # dance), the same "marked/possible" figure the "Totals by round"
+        # table shows above -- per user request; the cell was left blank
+        # before, since neither tally runs into it.
+        grand_total = f"{int(pivot.sum().sum())}/{panel_size * len(dances)}"
+        totals_row = [f"{int(pivot[d].sum())}/{panel_size}" for d in dances] + [grand_total]
         grid.loc["Marked"] = totals_row
         grid.index.name = "Judge"
         grids[round_name] = grid
@@ -2329,7 +2335,8 @@ def competition_search(session, *, linked_competition_id: int | None = None, lin
                 st.caption(
                     "Y (black) = marked (recalled) this couple in that dance, N (gray) = did not. "
                     "\"Marked\" totals show how many of the round's dances a judge marked this "
-                    "couple in, and how many of the panel marked the couple in that dance. "
+                    "couple in, and how many of the panel marked the couple in that dance; the "
+                    "bottom-right cell is the round's overall total. "
                     "Final excluded -- its marks are placements, not a yes/no recall."
                 )
                 for round_name, grid in grids.items():
