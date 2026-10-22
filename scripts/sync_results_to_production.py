@@ -118,7 +118,18 @@ def row_to_dict(model, obj) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", help="print what would sync without writing anything")
+    parser.add_argument(
+        "--force",
+        type=str,
+        default=None,
+        help="comma-separated NDCA source_code(s) (the cyi, e.g. '455') to sync regardless of the "
+        "source_updated_at comparison -- for a competition whose production row already carries a "
+        "source_updated_at that matches local without the results actually being there (e.g. its row "
+        "was inserted by sync_missing_scheduled_heat_deps.py as a scheduled_heat FK dependency, "
+        "copying local's value verbatim, before local's own value was corrected)",
+    )
     args = parser.parse_args()
+    forced_codes = set(args.force.split(",")) if args.force else set()
 
     pg_url = os.environ.get("DSR_DATABASE_URL")
     if not pg_url or not pg_url.startswith("postgres"):
@@ -143,6 +154,7 @@ def main() -> None:
         cid
         for cid, comp in local_comps.items()
         if comparable_timestamp(prod_updated_at.get(cid)) != comparable_timestamp(comp.source_updated_at)
+        or comp.source_code in forced_codes
     ]
     print(f"{len(local_comps)} local NDCA competitions, {len(changed_ids)} need syncing to production.")
     if not changed_ids:
