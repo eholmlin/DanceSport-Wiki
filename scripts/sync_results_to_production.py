@@ -1,5 +1,6 @@
 """Incremental sync of competition results from local SQLite to production
 Postgres, for competitions whose results changed since the last sync.
+Covers every source in SYNCED_SOURCES (NDCA Premier and Cre8tive Score).
 
 Unlike migrate_sqlite_to_postgres.py, this never TRUNCATEs anything: every
 row is upserted (inserted if new, updated in place if it already exists,
@@ -25,7 +26,7 @@ import argparse
 import datetime as dt
 import os
 
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import bindparam, create_engine, delete, inspect, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import sessionmaker
 
@@ -35,6 +36,7 @@ from dsr.models import (
     CompEvent,
     Entry,
     Mark,
+    MarkHesitation,
     Organization,
     Partnership,
     Person,
@@ -43,6 +45,12 @@ from dsr.models import (
 )
 
 CHUNK_SIZE = 2000
+
+# Sources whose results this script syncs. Each must set
+# Competition.source_updated_at to something that changes when its results
+# do (NDCA: Publish_Dates.Results; Cre8tive: resultsPublishedAt) -- that
+# value is the change detector.
+SYNCED_SOURCES = ("ndca_premier", "cre8tive")
 
 # SQLite rejects a query with too many "?" placeholders (SQLITE_MAX_VARIABLE_NUMBER,
 # as low as 999 on some builds), so any WHERE ... IN (...) over an id list that can
@@ -122,7 +130,7 @@ def main() -> None:
         "--force",
         type=str,
         default=None,
-        help="comma-separated NDCA source_code(s) (the cyi, e.g. '455') to sync regardless of the "
+        help="comma-separated source_code(s) (NDCA's cyi, e.g. '455', or a Cre8tive competition id) to sync regardless of the "
         "source_updated_at comparison -- for a competition whose production row already carries a "
         "source_updated_at that matches local without the results actually being there (e.g. its row "
         "was inserted by sync_missing_scheduled_heat_deps.py as a scheduled_heat FK dependency, "
@@ -141,12 +149,15 @@ def main() -> None:
 
     local_comps = {
         c.id: c
-        for c in sqlite.execute(select(Competition).where(Competition.source == "ndca_premier")).scalars().all()
+        for c in sqlite.execute(select(Competition).where(Competition.source.in_(SYNCED_SOURCES))).scalars().all()
     }
     with pg_engine.connect() as pg_conn:
         prod_updated_at = dict(
             pg_conn.execute(
-                text("select id, source_updated_at from competition where source='ndca_premier'")
+                text("select id, source_updated_at from competition where source in :sources").bindparams(
+                    bindparam("sources", expanding=True)
+                ),
+                {"sources": list(SYNCED_SOURCES)},
             ).all()
         )
 
@@ -156,7 +167,7 @@ def main() -> None:
         if comparable_timestamp(prod_updated_at.get(cid)) != comparable_timestamp(comp.source_updated_at)
         or comp.source_code in forced_codes
     ]
-    print(f"{len(local_comps)} local NDCA competitions, {len(changed_ids)} need syncing to production.")
+    print(f"{len(local_comps)} local competitions, {len(changed_ids)} need syncing to production.")
     if not changed_ids:
         print("Nothing to do.")
         return
@@ -175,11 +186,22 @@ def main() -> None:
 
     results = select_in_chunks(sqlite, Result, Result.comp_event_id, comp_event_ids)
     marks = select_in_chunks(sqlite, Mark, Mark.round_id, round_ids)
+    hesitations = select_in_chunks(sqlite, MarkHesitation, MarkHesitation.round_id, round_ids)
 
     print(
         f"\n{len(comp_events)} comp_events, {len(entries)} entries, {len(rounds)} rounds, "
-        f"{len(results)} results, {len(marks)} marks to upsert."
+        f"{len(results)} results, {len(marks)} marks, {len(hesitations)} hesitation flags to upsert."
     )
+
+    # mark_hesitation arrived after the rest of the production schema; fail
+    # before writing anything (rather than half-sync and stamp the
+    # competition as done) if there are flags to sync and no table for them.
+    has_hesitation_table = inspect(pg_engine).has_table("mark_hesitation")
+    if hesitations and not has_hesitation_table:
+        raise SystemExit(
+            "Production has no mark_hesitation table yet. Run 'Add Cre8tive Table to Production.command' "
+            "(scripts/add_mark_hesitation_to_production.py) once, then re-run this sync."
+        )
 
     needed_partnership_ids = {e.partnership_id for e in entries if e.partnership_id is not None}
     needed_organization_ids = {e.organization_id for e in entries if e.organization_id is not None}
@@ -198,6 +220,7 @@ def main() -> None:
         if pid is not None
     }
     needed_person_ids |= {m.judge_person_id for m in marks if m.judge_person_id is not None}
+    needed_person_ids |= {h.judge_person_id for h in hesitations}
     with pg_engine.connect() as pg_conn:
         existing_person_ids = {row[0] for row in pg_conn.execute(text("select id from person")).all()}
     missing_person_ids = needed_person_ids - existing_person_ids
@@ -218,6 +241,19 @@ def main() -> None:
         return
 
     with pg_engine.begin() as pg_conn:
+        # Competition first: a competition new to production (Cre8tive ones
+        # are -- NDCA's already arrive via the heat-list sync) must exist
+        # before its comp_event rows can reference it. This is one
+        # transaction, so a failure further down rolls this back too and the
+        # next run still sees the competition as unsynced.
+        n = upsert_by_pk(
+            pg_conn,
+            Competition,
+            [row_to_dict(Competition, local_comps[cid]) for cid in changed_ids],
+            ["id"],
+        )
+        print(f"Upserted {n} competition rows (so future runs see these as already synced).")
+
         n = insert_missing_only(pg_conn, Person, [row_to_dict(Person, p) for p in missing_people])
         print(f"Inserted {n} new person rows.")
         n = insert_missing_only(
@@ -242,13 +278,17 @@ def main() -> None:
         n = upsert_by_pk(pg_conn, Mark, [row_to_dict(Mark, m) for m in marks], ["id"])
         print(f"Upserted {n} mark rows.")
 
-        n = upsert_by_pk(
-            pg_conn,
-            Competition,
-            [row_to_dict(Competition, local_comps[cid]) for cid in changed_ids],
-            ["id"],
-        )
-        print(f"Upserted {n} competition rows (so future runs see these as already synced).")
+        if has_hesitation_table:
+            # Replace, don't upsert: a reload re-creates a round's flags with
+            # new ids, and the old production rows would collide with them on
+            # the table's (round, entry, judge, dance) unique key.
+            hesitation_table = MarkHesitation.__table__
+            for i in range(0, len(round_ids), CHUNK_SIZE):
+                pg_conn.execute(
+                    delete(hesitation_table).where(hesitation_table.c.round_id.in_(round_ids[i : i + CHUNK_SIZE]))
+                )
+            n = insert_missing_only(pg_conn, MarkHesitation, [row_to_dict(MarkHesitation, h) for h in hesitations])
+            print(f"Replaced hesitation rows: {n} inserted.")
 
     print("\nDone.")
 

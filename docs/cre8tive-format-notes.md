@@ -79,4 +79,4 @@ Snapshot `kind` values (from the app's JS): `meta`, `schedule`, `result-index`,
 - Couples that appear in a round's summary but not in the competitor list (e.g. Monday M006, couple 38) are skipped and counted.
 - Non-finalists get a result with no placement (same as NDCA); finalists get their overall final rank.
 - Names are title-cased from upper case; `** ` prefixes are stripped; no `AND` means a solo entry. Judge titles (Mr/Ms) are stripped.
-- Not wired into production sync: `scripts/sync_results_to_production.py` only handles `ndca_premier`.
+- Production sync: `scripts/sync_results_to_production.py` covers `ndca_premier` and `cre8tive` (`SYNCED_SOURCES`). Before the first Cre8tive push, run `Add Cre8tive Table to Production.command` once (creates `mark_hesitation`; the sync refuses to run without it). Verified against a real Postgres: first sync, no-op re-run, and a forced re-sync after the flags' ids changed.

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 from dsr.db import DEFAULT_DB_PATH
@@ -57,7 +57,19 @@ def counts_by_competition(conn, is_sqlite: bool) -> dict[str, dict[int, int]]:
             "join comp_event ce on r.comp_event_id = ce.id group by ce.competition_id"
         )
     )
+    if _has_table(conn, "mark_hesitation"):
+        out["hesitation"] = dict(
+            q(
+                "select ce.competition_id, count(*) from mark_hesitation h "
+                "join round r on h.round_id = r.id "
+                "join comp_event ce on r.comp_event_id = ce.id group by ce.competition_id"
+            )
+        )
     return out
+
+
+def _has_table(conn, name: str) -> bool:
+    return inspect(conn).has_table(name)
 
 
 def main() -> None:
@@ -86,9 +98,9 @@ def main() -> None:
     mismatches = []
     for cid in sorted(all_comp_ids):
         row_mismatch = {}
-        for table_name in ("comp_event", "entry", "round", "result", "mark"):
-            local_n = local[table_name].get(cid, 0)
-            prod_n = prod[table_name].get(cid, 0)
+        for table_name in ("comp_event", "entry", "round", "result", "mark", "hesitation"):
+            local_n = local.get(table_name, {}).get(cid, 0)
+            prod_n = prod.get(table_name, {}).get(cid, 0)
             if local_n != prod_n:
                 row_mismatch[table_name] = (local_n, prod_n)
         if row_mismatch:
