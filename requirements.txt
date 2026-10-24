@@ -1,1 +1,6 @@
 -e .[app,postgres]
+# Streamlit Cloud runs Python 3.14, where altair 5.x can't even be imported
+# (see the note in pyproject.toml). Stated here as well as in pyproject so a
+# rebuild that reuses an already-installed altair 5.x still upgrades it; the
+# marker keeps the local Python 3.9 venv on 5.x, which is all it can install.
+altair>=6; python_version >= "3.11"
