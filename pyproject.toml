@@ -32,12 +32,16 @@ dev = [
 ]
 app = [
     "streamlit>=1.35",
-    # pandas 3 and altair 6 (both Python 3.11+, so invisible to the local
-    # Python 3.9 venv) are major jumps the app has never run on; same
-    # reason as the SQLAlchemy cap above.
+    # pandas 3 (Python 3.11+, so invisible to the local Python 3.9 venv) is
+    # a major jump the app has never run on; same reason as the SQLAlchemy
+    # cap above. Altair is deliberately NOT capped: 5.x can't even import on
+    # Python 3.14 (its typing_extensions-style TypedDict(closed=True) raises
+    # TypeError there), which is what Streamlit Cloud runs, and an earlier
+    # "<6" cap took production down on its next rebuild. The local Python
+    # 3.9 venv resolves to 5.x by itself, since 6 needs a newer Python.
     "pandas>=2.0,<3",
     "reportlab>=4.0",
-    "altair>=5.0,<6",
+    "altair>=5.0",
     "matplotlib>=3.8",
 ]
 postgres = [
