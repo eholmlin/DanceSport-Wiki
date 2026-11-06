@@ -8,12 +8,17 @@
 #
 #  - Once a day: a successful run writes today's date to
 #    logs/.last-success-<job>. Any later trigger the same day exits at once,
-#    so the job can be (and is) scheduled many times a day -- hourly from 6am
-#    until evening, and at login -- and the first trigger that finds the Mac
+#    so the job can be (and is) scheduled many times a day -- every hour
+#    of the day, and at login -- and the first trigger that finds the Mac
 #    awake and online does the work. This is the catch-up: a Mac that was
 #    asleep or off at 6am (launchd does not fire a missed slot for a machine
 #    that was powered off, and a sleeping one can wake with no network yet)
 #    simply runs it at the next trigger instead of skipping the day.
+#  - Does nothing before 6am local (DSR_EARLIEST_HOUR). The launchd jobs fire
+#    every hour of the day, because launchd can evaluate calendar times in a
+#    different time zone than the Mac's clock after the zone changes (seen
+#    after a Oct 30 change: slots meant for 6am-9pm fired 10pm-1pm), so the
+#    "not before 6am" rule lives here, where it uses the real local time.
 #  - Waits for the network before starting (the 6am-wake failure was a DNS
 #    error with the Wi-Fi not up yet).
 #  - Retries a failed run, after a pause.
@@ -21,7 +26,7 @@
 #
 # Set DSR_FORCE=1 to run even if today's marker exists (a manual re-run).
 #
-# Test/override knobs: DSR_MARKER_DIR, DSR_NETWORK_CHECK_URL,
+# Test/override knobs: DSR_EARLIEST_HOUR, DSR_MARKER_DIR, DSR_NETWORK_CHECK_URL,
 # DSR_NETWORK_WAIT_SECONDS, DSR_RETRY_PAUSE_SECONDS, DSR_MAX_ATTEMPTS.
 set -uo pipefail
 
@@ -38,12 +43,18 @@ CHECK_URL="${DSR_NETWORK_CHECK_URL:-https://ndcapremier.com/}"
 NETWORK_WAIT="${DSR_NETWORK_WAIT_SECONDS:-900}"
 RETRY_PAUSE="${DSR_RETRY_PAUSE_SECONDS:-300}"
 MAX_ATTEMPTS="${DSR_MAX_ATTEMPTS:-3}"
+EARLIEST_HOUR="${DSR_EARLIEST_HOUR:-6}"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $JOB: $*"; }
 
 TODAY="$(date +%Y-%m-%d)"
 if [ -z "${DSR_FORCE:-}" ] && [ -f "$MARKER" ] && [ "$(cat "$MARKER")" = "$TODAY" ]; then
   log "already succeeded today, nothing to do"
+  exit 0
+fi
+
+if [ -z "${DSR_FORCE:-}" ] && [ "$(date +%-H)" -lt "$EARLIEST_HOUR" ]; then
+  log "before ${EARLIEST_HOUR}:00 local, too early"
   exit 0
 fi
 
