@@ -1689,7 +1689,19 @@ def marks_by_judge_grid_merged(
                             value = cell
                     col.append(value)
                 data[f"{dance} ({label})"] = col
-        merged_df = pd.DataFrame(data, index=judges)
+        # Bottom "Marked" row: how many of the panel marked each couple in
+        # each dance -- the same tally row marks_by_judge_grid puts under a
+        # single couple's grid (copied from there, so both views always
+        # agree), so a dance's total sits at the foot of its column for
+        # every compared couple. Per user request.
+        for dance in dances:
+            for label, couple in zip(labels, couples):
+                grid = grids_by_couple[couple].get(round_name)
+                tally = "-"
+                if grid is not None and "Marked" in grid.index and dance in grid.columns:
+                    tally = grid.loc["Marked", dance]
+                data[f"{dance} ({label})"].append(tally)
+        merged_df = pd.DataFrame(data, index=judges + ["Marked"])
         merged_df.index.name = "Judge"
         merged[round_name] = merged_df
     return merged
@@ -1757,7 +1769,10 @@ def _style_merged_marks_grid(grid: pd.DataFrame, group_size: int, judge_col_widt
                     "props": "border-left: 6px solid #ffffff !important;",
                 }
             )
-    return grid.style.map(_style).set_table_styles(table_styles)
+    def _bold_total_row(column):
+        return ["font-weight: bold;" if label == "Marked" else "" for label in column.index]
+
+    return grid.style.map(_style).apply(_bold_total_row, axis=0).set_table_styles(table_styles)
 
 
 def _skating_system_rank(votes_by_competitor: dict[int, list[int]]) -> dict[int, int]:

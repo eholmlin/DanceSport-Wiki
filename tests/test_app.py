@@ -15,6 +15,8 @@ from app import (
     _skating_system_rank,
     _split_history_by_category,
     best_results,
+    marks_by_judge_grid,
+    marks_by_judge_grid_merged,
     marks_detail_for_entry,
     marks_detail_with_totals,
     result_history_for_partnership,
@@ -717,3 +719,25 @@ def test_festival_days_group_under_one_heading_in_date_order():
     assert groups["International Dance Festival 2026"] == [monday, thu_afternoon, thu_evening]
     # a lone Cre8tive competition and non-Cre8tive names are never grouped
     assert group_festival_days([platinum, ndca]) == {}
+
+
+def test_merged_head_to_head_grid_ends_with_each_couples_marked_tally_per_dance():
+    def marks(waltz, tango):
+        rows = [
+            {"Round": "Semi-Final", "Dance": "Waltz", "Judge": j, "_numeric": v, "_is_placement": False}
+            for j, v in zip("ABC", waltz)
+        ] + [
+            {"Round": "Semi-Final", "Dance": "Tango", "Judge": j, "_numeric": v, "_is_placement": False}
+            for j, v in zip("ABC", tango)
+        ]
+        return marks_by_judge_grid(pd.DataFrame(rows))
+
+    grids = {"One and Two": marks([1, 1, 0], [1, 1, 1]), "Three and Four": marks([0, 1, 0], [1, 0, 0])}
+    merged = marks_by_judge_grid_merged(grids, ["One and Two", "Three and Four"])["Semi-Final"]
+
+    assert list(merged.index) == ["A", "B", "C", "Marked"]
+    tally = merged.loc["Marked"]
+    assert tally["Waltz (A)"] == "2/3"
+    assert tally["Waltz (B)"] == "1/3"
+    assert tally["Tango (A)"] == "3/3"
+    assert tally["Tango (B)"] == "1/3"
