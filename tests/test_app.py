@@ -10,6 +10,7 @@ import pandas as pd
 from app import (
     group_festival_days,
     heats_for_followed_people,
+    heats_to_ics,
     parse_follow_ids,
     _classify_titles,
     _highest_round_labels_for_entries,
@@ -800,3 +801,31 @@ def test_heats_for_followed_people_finds_every_couple_a_followed_dancer_is_in(tm
 
     assert heats_for_followed_people(session, []).empty
     assert heats_for_followed_people(session, [pro.id + 1000]).empty
+
+
+def test_heats_to_ics_makes_a_reminder_per_upcoming_heat_with_a_stable_id():
+    def row(uid, hour, danced="No", event="Open Bronze, Waltz; Tango"):
+        return {
+            "Time": "", "Heat #": "22", "Followed": "Jerry Bursh", "Couple": "Jerry Bursh & Amy Hanson",
+            "Competition": "Imperial Star Ball", "Event": event, "Round": "Final", "Floor": "A",
+            "Danced": danced, "_scheduled_time": dt.datetime(2026, 11, 11, hour, 57) if hour else pd.NaT,
+            "_uid": uid,
+        }
+
+    heats = pd.DataFrame([row("a", 17), row("b", 18, danced="Yes"), row("c", None)])
+    now = dt.datetime(2026, 11, 10, 12, 0, tzinfo=dt.timezone.utc)
+    text = heats_to_ics(heats, 20, now=now).decode("utf-8")
+
+    assert text.startswith("BEGIN:VCALENDAR\r\n") and text.endswith("END:VCALENDAR\r\n")
+    assert text.count("BEGIN:VEVENT") == 1  # danced and time-less heats are left out
+    assert "UID:a@dancesport-wiki" in text
+    assert "DTSTART:20261111T175700" in text  # local "floating" time, no zone
+    assert "TRIGGER:-PT20M" in text
+    assert "SUMMARY:Heat 22 - Jerry Bursh & Amy Hanson" in text
+    assert "LOCATION:Imperial Star Ball\\, Floor A" in text
+    assert "Open Bronze\\, Waltz\\; Tango" in text.replace("\r\n ", "")  # commas/semicolons escaped
+    # every line obeys the 75-octet limit
+    assert all(len(line.encode("utf-8")) <= 75 for line in text.split("\r\n"))
+    # re-generating gives the same id, so re-importing updates rather than duplicates
+    assert "UID:a@dancesport-wiki" in heats_to_ics(heats, 30, now=now).decode("utf-8")
+    assert heats_to_ics(heats.iloc[0:0], 20, now=now).decode("utf-8").count("BEGIN:VEVENT") == 0

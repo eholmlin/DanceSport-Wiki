@@ -3074,7 +3074,7 @@ def heats_for_followed_people(session, person_ids: list[int]) -> pd.DataFrame:
     three students can see at a glance whose heat each row is."""
     columns = [
         "Date", "Day", "Time", "Competition", "Followed", "Couple", "Event", "Round",
-        "Heat #", "Floor", "Danced", "View event", "_scheduled_time",
+        "Heat #", "Floor", "Danced", "View event", "_scheduled_time", "_uid",
     ]
     if not person_ids:
         return pd.DataFrame(columns=columns)
@@ -3123,6 +3123,10 @@ def heats_for_followed_people(session, person_ids: list[int]) -> pd.DataFrame:
                 "Danced": "Yes" if heat.is_complete else "No",
                 "View event": f"?heat_competition_id={competition.id}&heat_event_id={heat.source_event_id}",
                 "_scheduled_time": t,
+                # Stable across schedule refreshes (the same key the table's
+                # own unique constraint uses), so re-importing the calendar
+                # file updates a heat's calendar entry instead of duplicating it.
+                "_uid": f"heat-{heat.source}-{heat.source_event_id}-{heat.round_name}-{partnership.id}",
             }
         )
     df = pd.DataFrame(out, columns=columns)
@@ -3155,6 +3159,89 @@ def recent_results_for_followed_people(session, person_ids: list[int], days: int
         return pd.DataFrame(columns=columns)
     combined = pd.concat(frames, ignore_index=True).sort_values("Date", ascending=False, kind="stable")
     return combined[columns].reset_index(drop=True)
+
+
+_REMINDER_CHOICES = [10, 15, 20, 30, 45, 60]
+
+
+def _ics_text(value) -> str:
+    """Escapes text for an iCalendar property value (RFC 5545 section 3.3.11)."""
+    return (
+        str(value).replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,")
+        .replace("\r\n", "\\n").replace("\n", "\\n")
+    )
+
+
+def _ics_fold(line: str) -> list[str]:
+    """Folds one content line to at most 75 octets (RFC 5545 section 3.1);
+    continuation lines start with a space. Never splits a UTF-8 character."""
+    raw = line.encode("utf-8")
+    if len(raw) <= 75:
+        return [line]
+    parts: list[str] = []
+    current = b""
+    limit = 75
+    for ch in line:
+        encoded = ch.encode("utf-8")
+        if len(current) + len(encoded) > limit:
+            parts.append(current.decode("utf-8"))
+            current = b""
+            limit = 74  # the leading space of a continuation line counts too
+        current += encoded
+    parts.append(current.decode("utf-8"))
+    return [parts[0]] + [" " + p for p in parts[1:]]
+
+
+def heats_to_ics(heats: pd.DataFrame, minutes_before: int, now: dt.datetime | None = None) -> bytes:
+    """An iCalendar (.ics) file with one event per heat that has a
+    published time and hasn't been danced yet, each with a reminder alarm
+    `minutes_before` minutes ahead. Import it into the phone's Calendar and
+    the phone itself shows the notification, with no app, account or server.
+
+    Times are written as "floating" local times (no time zone), which is
+    what an in-person event wants: 5:57 PM is 5:57 PM wherever the phone is
+    set to be when the venue is local. Each event carries a stable UID, so
+    importing an updated file replaces the earlier entries instead of
+    adding duplicates when the schedule shifts."""
+    stamp = (now or dt.datetime.now(dt.timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//DanceSport Wiki//Followed heats//EN",
+        "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH",
+        "X-WR-CALNAME:DanceSport heats",
+    ]
+    records = []
+    if not heats.empty:
+        upcoming = heats[heats["_scheduled_time"].notna() & (heats["Danced"] == "No")]
+        records = upcoming.to_dict("records")
+    for row in records:
+        start = row["_scheduled_time"]
+        end = start + dt.timedelta(minutes=10)
+        who = row["Couple"] or row["Followed"]
+        heat_label = f"Heat {row['Heat #']}" if row["Heat #"] else "Heat"
+        floor = f"Floor {row['Floor']}" if row["Floor"] else ""
+        lines += [
+            "BEGIN:VEVENT",
+            f"UID:{row['_uid']}@dancesport-wiki",
+            f"DTSTAMP:{stamp}",
+            f"DTSTART:{start:%Y%m%dT%H%M%S}",
+            f"DTEND:{end:%Y%m%dT%H%M%S}",
+            "SUMMARY:" + _ics_text(f"{heat_label} - {who}"),
+            "LOCATION:" + _ics_text(", ".join(p for p in (row["Competition"], floor) if p)),
+            "DESCRIPTION:"
+            + _ics_text(f"{row['Event']} ({row['Round']}). Times can change - check the schedule at the venue."),
+            "BEGIN:VALARM",
+            "ACTION:DISPLAY",
+            "DESCRIPTION:" + _ics_text(f"{heat_label} in {minutes_before} minutes - {who}"),
+            f"TRIGGER:-PT{int(minutes_before)}M",
+            "END:VALARM",
+            "END:VEVENT",
+        ]
+    lines.append("END:VCALENDAR")
+    folded = [piece for line in lines for piece in _ics_fold(line)]
+    return ("\r\n".join(folded) + "\r\n").encode("utf-8")
 
 
 def following_page(session) -> None:
@@ -3218,6 +3305,29 @@ def following_page(session) -> None:
                 use_container_width=True,
                 hide_index=True,
                 column_config=_HEAT_EVENT_LINK_COLUMN_CONFIG,
+            )
+
+        upcoming_count = int(((heats["Danced"] == "No") & heats["_scheduled_time"].notna()).sum())
+        if upcoming_count:
+            st.write("**Get reminders**")
+            minutes = st.selectbox(
+                "Remind me this many minutes before each heat",
+                _REMINDER_CHOICES,
+                index=_REMINDER_CHOICES.index(20),
+                key="follow_reminder_minutes",
+            )
+            st.download_button(
+                f"Download calendar reminders ({upcoming_count} heats)",
+                heats_to_ics(heats, minutes),
+                file_name="dancesport-heats.ics",
+                mime="text/calendar",
+                key="follow_ics_download",
+            )
+            st.caption(
+                "Open the downloaded file on your phone and choose Add to Calendar: each heat becomes a calendar "
+                "entry, and your phone itself sends the reminder -- no app or login needed, and it works "
+                "without a signal at the venue. Schedules can shift, so download the file again the morning "
+                "of the competition; importing it again updates the same entries instead of duplicating them."
             )
 
     st.subheader("Recent results (last 30 days)")
