@@ -9,6 +9,8 @@ import pandas as pd
 
 from app import (
     group_festival_days,
+    heats_for_followed_people,
+    parse_follow_ids,
     _classify_titles,
     _highest_round_labels_for_entries,
     _ordinal,
@@ -25,7 +27,7 @@ from app import (
 )
 
 from dsr.db import get_session, init_db
-from dsr.models import CompEvent, Competition, Entry, Mark, Partnership, Person, Result, Round
+from dsr.models import CompEvent, Competition, Entry, Mark, Partnership, Person, Result, Round, ScheduledHeat
 
 
 def test_highest_round_is_scoped_per_comp_event_not_shared_entry(tmp_path):
@@ -741,3 +743,60 @@ def test_merged_head_to_head_grid_ends_with_each_couples_marked_tally_per_dance(
     assert tally["Waltz (B)"] == "1/3"
     assert tally["Tango (A)"] == "3/3"
     assert tally["Tango (B)"] == "1/3"
+
+
+def test_parse_follow_ids_is_forgiving_about_hand_edited_addresses():
+    assert parse_follow_ids("12,345,12, 7") == [12, 345, 7]  # de-duplicated, in order
+    assert parse_follow_ids("5,abc,-3,0,,9.5,8") == [5, 8]  # junk dropped, never a crash
+    assert parse_follow_ids("") == []
+    assert parse_follow_ids(None) == []
+    assert len(parse_follow_ids(",".join(str(i) for i in range(1, 200)))) == 40
+
+
+def test_heats_for_followed_people_finds_every_couple_a_followed_dancer_is_in(tmp_path):
+    engine = init_db(tmp_path / "following.sqlite3")
+    session = get_session(engine)
+    comp = Competition(source="ndca_premier", source_code="9", name="Spring Classic")
+    anna, mark, leo, dana, student, pro = (
+        Person(display_name=n) for n in ("Anna", "Mark", "Leo", "Dana", "Sam Student", "Pat Pro")
+    )
+    session.add_all([comp, anna, mark, leo, dana, student, pro])
+    session.flush()
+    anna_mark = Partnership(leader_id=mark.id, follower_id=anna.id, kind="amateur")
+    anna_leo = Partnership(leader_id=leo.id, follower_id=anna.id, kind="amateur")
+    leo_dana = Partnership(leader_id=leo.id, follower_id=dana.id, kind="amateur")
+    pro_am = Partnership(leader_id=pro.id, follower_id=None, student_id=student.id, kind="pro_am")
+    session.add_all([anna_mark, anna_leo, leo_dana, pro_am])
+    session.flush()
+
+    def heat(partnership, event_id, hour, number):
+        return ScheduledHeat(
+            competition_id=comp.id, partnership_id=partnership.id, source="ndca_premier",
+            source_event_id=event_id, event_name=f"Event {event_id}", round_name="Final",
+            heat_number=number, floor="A", scheduled_time=dt.datetime(2026, 11, 14, hour, 30),
+            updated_at=dt.datetime(2026, 11, 1, tzinfo=dt.timezone.utc),
+        )
+
+    session.add_all(
+        [
+            heat(anna_mark, "e1", 11, "20"),
+            heat(anna_leo, "e2", 9, "5"),
+            heat(leo_dana, "e3", 10, "12"),  # nobody followed here except Leo, if followed
+            heat(pro_am, "e4", 8, "2"),
+        ]
+    )
+    session.commit()
+
+    anna_only = heats_for_followed_people(session, [anna.id])
+    # both of Anna's couples, soonest first, naming who is followed
+    assert anna_only["Time"].tolist() == ["9:30 AM", "11:30 AM"]
+    assert anna_only["Followed"].tolist() == ["Anna", "Anna"]
+    assert anna_only["Heat #"].tolist() == ["5", "20"]
+
+    several = heats_for_followed_people(session, [anna.id, student.id, dana.id])
+    assert several["Time"].tolist() == ["8:30 AM", "9:30 AM", "10:30 AM", "11:30 AM"]
+    assert several.loc[0, "Followed"] == "Sam Student"  # a Pro-Am student's heat shows up too
+    assert several.loc[2, "Followed"] == "Dana"
+
+    assert heats_for_followed_people(session, []).empty
+    assert heats_for_followed_people(session, [pro.id + 1000]).empty

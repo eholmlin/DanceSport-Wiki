@@ -219,7 +219,9 @@ _HEAT_LIST_LINK_COLUMN_CONFIG = {**_HEAT_EVENT_LINK_COLUMN_CONFIG, **_PARTNER_LI
 
 
 @st.cache_data(ttl=600)
-def result_histories_for_partnerships(_session, db_identity: str, partnership_ids: list[int]) -> dict[int, pd.DataFrame]:
+def result_histories_for_partnerships(
+    _session, db_identity: str, partnership_ids: list[int], since: dt.date | None = None
+) -> dict[int, pd.DataFrame]:
     """Batched version of result_history_for_partnership: one query for
     every partnership's results at once instead of one query per
     partnership. Locally (SQLite, ~0 round-trip cost) a per-partnership
@@ -246,6 +248,11 @@ def result_histories_for_partnerships(_session, db_identity: str, partnership_id
         .where(Entry.partnership_id.in_(partnership_ids))
         .order_by(Competition.start_date.desc())
     )
+    if since is not None:
+        # Only the Following page uses this (recent results for a handful
+        # of followed people) -- keeps it from computing every placement a
+        # long-time instructor's dozens of partnerships ever earned.
+        stmt = stmt.where(Competition.start_date >= since)
     result_rows = _session.execute(stmt).all()
     highest_round_by_key = _highest_round_labels_for_entries(
         _session, [(entry.id, comp_event.id) for _, comp_event, entry, _ in result_rows]
@@ -2686,6 +2693,7 @@ def dancer_search(
     # this narrowed view is actually about, on a page whose whole point is
     # one specific partnership rather than one specific person.
     st.header(partner_label(session, partnerships[0]) if narrowed_to_one else person.display_name)
+    follow_button(person.id, key=f"follow_dancer_{person.id}")
     # Country is only ever known for WDSF-sourced people (NDCA doesn't
     # capture it) -- shown when we actually have it, hidden rather than a
     # placeholder "unknown" otherwise, per user request.
@@ -3003,6 +3011,228 @@ def compare_events_search(
         st.dataframe(only_b, use_container_width=True, hide_index=True)
 
 
+# ---------- Following ----------
+#
+# Deliberately account-free: the list of followed dancers lives in the page
+# address ("?follow=12,345"), so bookmarking the page (or adding it to a
+# phone's home screen) is what saves it. Nothing is stored on the server.
+
+_FOLLOW_PARAM = "follow"
+_MAX_FOLLOWED = 40
+
+
+def parse_follow_ids(raw: str | None) -> list[int]:
+    """The follow list from its query-string form: comma-separated person
+    ids, de-duplicated in order, anything that isn't a positive integer
+    dropped (a hand-edited or truncated address must never crash the page),
+    and capped at _MAX_FOLLOWED."""
+    ids: list[int] = []
+    for part in (raw or "").split(","):
+        part = part.strip()
+        if part.isdigit() and int(part) > 0 and int(part) not in ids:
+            ids.append(int(part))
+    return ids[:_MAX_FOLLOWED]
+
+
+def _followed_ids() -> list[int]:
+    return parse_follow_ids(st.query_params.get(_FOLLOW_PARAM))
+
+
+def _set_followed_ids(ids: list[int]) -> None:
+    if ids:
+        st.query_params[_FOLLOW_PARAM] = ",".join(str(i) for i in ids)
+    else:
+        st.query_params.pop(_FOLLOW_PARAM, None)
+
+
+def _follow(person_id: int) -> None:
+    ids = _followed_ids()
+    if person_id not in ids and len(ids) < _MAX_FOLLOWED:
+        _set_followed_ids(ids + [person_id])
+
+
+def _unfollow(person_id: int) -> None:
+    _set_followed_ids([i for i in _followed_ids() if i != person_id])
+
+
+def follow_button(person_id: int, key: str) -> None:
+    """Follow / unfollow toggle for one dancer (used on the Dancer page)."""
+    ids = _followed_ids()
+    if person_id in ids:
+        st.button("★ Following (click to unfollow)", key=key, on_click=_unfollow, args=(person_id,))
+    elif len(ids) >= _MAX_FOLLOWED:
+        st.caption(f"Your following list is full ({_MAX_FOLLOWED} dancers).")
+    else:
+        st.button("☆ Follow this dancer", key=key, on_click=_follow, args=(person_id,))
+
+
+def heats_for_followed_people(session, person_ids: list[int]) -> pd.DataFrame:
+    """Every scheduled heat for any partnership a followed person is part
+    of (as leader, follower or Pro-Am student), soonest first, across
+    every competition that has a heat list on file. "Followed" names which
+    of the couple's members are on the follow list, so a coach following
+    three students can see at a glance whose heat each row is."""
+    columns = [
+        "Date", "Day", "Time", "Competition", "Followed", "Couple", "Event", "Round",
+        "Heat #", "Floor", "Danced", "View event", "_scheduled_time",
+    ]
+    if not person_ids:
+        return pd.DataFrame(columns=columns)
+    rows = session.execute(
+        select(ScheduledHeat, Partnership, Competition)
+        .join(Partnership, ScheduledHeat.partnership_id == Partnership.id)
+        .join(Competition, ScheduledHeat.competition_id == Competition.id)
+        .where(
+            or_(
+                Partnership.leader_id.in_(person_ids),
+                Partnership.follower_id.in_(person_ids),
+                Partnership.student_id.in_(person_ids),
+            )
+        )
+    ).all()
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    everyone = {
+        pid for _, p, _ in rows for pid in (p.leader_id, p.follower_id, p.student_id) if pid is not None
+    }
+    names = _person_names(session, everyone)
+    followed = set(person_ids)
+    out = []
+    for heat, partnership, competition in rows:
+        members = [pid for pid in (partnership.leader_id, partnership.follower_id) if pid in names]
+        mine = [
+            names[pid]
+            for pid in dict.fromkeys(
+                [partnership.leader_id, partnership.follower_id, partnership.student_id]
+            )
+            if pid in followed and pid in names
+        ]
+        t = heat.scheduled_time
+        out.append(
+            {
+                "Date": t.date() if t else None,
+                "Day": t.strftime("%A") if t else None,
+                "Time": t.strftime("%I:%M %p").lstrip("0") if t else "TBD",
+                "Competition": competition.name,
+                "Followed": ", ".join(mine),
+                "Couple": " & ".join(names[pid] for pid in members) or "(solo)",
+                "Event": heat.event_name,
+                "Round": heat.round_name,
+                "Heat #": heat.heat_number,
+                "Floor": heat.floor,
+                "Danced": "Yes" if heat.is_complete else "No",
+                "View event": f"?heat_competition_id={competition.id}&heat_event_id={heat.source_event_id}",
+                "_scheduled_time": t,
+            }
+        )
+    df = pd.DataFrame(out, columns=columns)
+    return df.sort_values("_scheduled_time", na_position="last", kind="stable").reset_index(drop=True)
+
+
+def recent_results_for_followed_people(session, person_ids: list[int], days: int = 30) -> pd.DataFrame:
+    """Placements from the last `days` days for every partnership the
+    followed people are in, newest first."""
+    columns = ["Date", "Competition", "Couple", "Event", "Highest round", "Placement", "View"]
+    if not person_ids:
+        return pd.DataFrame(columns=columns)
+    db_identity = _db_identity(session)
+    partnerships = {}
+    for pid in person_ids:
+        for partnership in partnerships_for_person(session, db_identity, pid):
+            partnerships[partnership.id] = partnership
+    if not partnerships:
+        return pd.DataFrame(columns=columns)
+    since = dt.date.today() - dt.timedelta(days=days)
+    histories = result_histories_for_partnerships(session, db_identity, list(partnerships), since)
+    frames = []
+    for partnership_id, history in histories.items():
+        if history.empty:
+            continue
+        history = history.copy()
+        history["Couple"] = partner_label(session, partnerships[partnership_id])
+        frames.append(history)
+    if not frames:
+        return pd.DataFrame(columns=columns)
+    combined = pd.concat(frames, ignore_index=True).sort_values("Date", ascending=False, kind="stable")
+    return combined[columns].reset_index(drop=True)
+
+
+def following_page(session) -> None:
+    db_identity = _db_identity(session)
+    ids = _followed_ids()
+    st.caption(
+        "Follow yourself, your partner, your students or friends, and see all of their heats in one place. "
+        "Your list is saved in this page's address -- bookmark this page (or add it to your phone's home "
+        "screen) to keep it. Nothing is stored on our servers."
+    )
+
+    term = st.text_input("Add a dancer to follow", "", key="follow_add_term")
+    if term:
+        matches = search_people(session, db_identity, term, limit=8)
+        if not matches:
+            st.warning(f"No one found matching {term!r}.")
+        for person in matches:
+            row = st.columns([5, 2])
+            row[0].write(f"{person.display_name} ({person.country or 'unknown country'})")
+            if person.id in ids:
+                row[1].write("Following")
+            elif len(ids) >= _MAX_FOLLOWED:
+                row[1].write("List full")
+            else:
+                row[1].button("☆ Follow", key=f"follow_add_{person.id}", on_click=_follow, args=(person.id,))
+
+    if not ids:
+        st.info("You aren't following anyone yet. Search a name above, or open a dancer's page and tap Follow.")
+        return
+
+    names = _person_names(session, set(ids))
+    st.subheader(f"Following ({len(ids)})")
+    for pid in ids:
+        row = st.columns([5, 2])
+        row[0].write(names.get(pid, f"(unknown dancer {pid})"))
+        row[1].button("Unfollow", key=f"unfollow_{pid}", on_click=_unfollow, args=(pid,))
+
+    heats = heats_for_followed_people(session, ids)
+    st.subheader("Upcoming and current heats")
+    if heats.empty:
+        st.write(
+            "No heats on file for these dancers. Heat lists are published about two weeks before a "
+            "competition, so check back closer to the event."
+        )
+    else:
+        show_cols = ["Time", "Heat #", "Followed", "Couple", "Event", "Round", "Floor", "Danced", "View event"]
+        dated = heats[heats["Date"].notna()]
+        for (competition_name, date), group in dated.groupby(["Competition", "Date"], sort=False):
+            st.write(f"**{group['Day'].iloc[0]}, {date:%b} {date.day} -- {competition_name}**")
+            st.dataframe(
+                group[show_cols],
+                use_container_width=True,
+                hide_index=True,
+                column_config=_HEAT_EVENT_LINK_COLUMN_CONFIG,
+            )
+        undated = heats[heats["Date"].isna()]
+        if not undated.empty:
+            st.write("**Time not yet published**")
+            st.dataframe(
+                undated[show_cols],
+                use_container_width=True,
+                hide_index=True,
+                column_config=_HEAT_EVENT_LINK_COLUMN_CONFIG,
+            )
+
+    st.subheader("Recent results (last 30 days)")
+    results = recent_results_for_followed_people(session, ids)
+    if results.empty:
+        st.write("No results on file for these dancers in the last 30 days.")
+    else:
+        st.dataframe(
+            results.head(100),
+            use_container_width=True,
+            hide_index=True,
+            column_config=_VIEW_LINK_COLUMN_CONFIG,
+        )
+
+
 def main() -> None:
     session = _session()
     st.title("DanceSport Wiki")
@@ -3031,13 +3261,19 @@ def main() -> None:
     # mode radio's own remembered selection (see search_mode_radio below)
     # has to be cleared alongside it -- query params alone no longer
     # decide the mode on every rerun, just the first one.
-    if st.query_params:
+    # The follow list lives in the address too (see following_page), so
+    # "New search" keeps it and the button only shows when something else
+    # is in the address.
+    if any(key != _FOLLOW_PARAM for key in st.query_params):
         if st.button("← New search"):
+            kept_follow = st.query_params.get(_FOLLOW_PARAM)
             st.query_params.clear()
+            if kept_follow:
+                st.query_params[_FOLLOW_PARAM] = kept_follow
             st.session_state.pop("search_mode_radio", None)
             st.rerun()
 
-    mode_options = ["Dancer", "Competition", "Heat Lists", "Compare Events"]
+    mode_options = ["Dancer", "Following", "Competition", "Heat Lists", "Compare Events"]
     # A plain index= default only takes effect on this radio's very first
     # render in a session -- once a user has touched it, Streamlit
     # remembers that choice via its key and ignores index= on subsequent
@@ -3055,6 +3291,11 @@ def main() -> None:
             st.session_state["search_mode_radio"] = "Competition"
         elif linked_compare_a_competition_id:
             st.session_state["search_mode_radio"] = "Compare Events"
+        elif linked_person_id:
+            st.session_state["search_mode_radio"] = "Dancer"
+        elif _followed_ids():
+            # A bookmarked "?follow=..." address opens straight to the list.
+            st.session_state["search_mode_radio"] = "Following"
         else:
             st.session_state["search_mode_radio"] = "Dancer"
     mode = st.radio("Search by", mode_options, horizontal=True, key="search_mode_radio")
@@ -3064,6 +3305,8 @@ def main() -> None:
             linked_person_id=int(linked_person_id) if linked_person_id else None,
             linked_partnership_id=int(linked_partnership_id) if linked_partnership_id else None,
         )
+    elif mode == "Following":
+        following_page(session)
     elif mode == "Competition":
         competition_search(
             session,
