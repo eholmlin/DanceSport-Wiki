@@ -9,6 +9,8 @@ import re
 from html import escape
 from io import BytesIO
 from typing import NamedTuple, Optional
+from urllib.parse import quote, urlsplit, urlunsplit
+from zoneinfo import ZoneInfo
 
 import altair as alt
 import pandas as pd
@@ -17,7 +19,7 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import landscape, letter
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 
 from dsr.db import get_engine, get_session
 from dsr.load.wdsf import guess_style
@@ -2778,6 +2780,10 @@ def dancer_search(
                         best, use_container_width=True, hide_index=True, column_config=_VIEW_LINK_COLUMN_CONFIG
                     )
 
+    if narrowed_to_one:
+        st.subheader("Progress and competition recaps")
+        _couple_progress_and_recap(session, partnerships[0], key_prefix="dancer")
+
 
 def _heat_list_event_roster(session, db_identity: str, competition_id: int, source_event_id: str) -> pd.DataFrame:
     """A compare_events_search-shaped roster (Couple, Placement,
@@ -3075,6 +3081,7 @@ def heats_for_followed_people(session, person_ids: list[int]) -> pd.DataFrame:
     columns = [
         "Date", "Day", "Time", "Competition", "Followed", "Couple", "Event", "Round",
         "Heat #", "Floor", "Danced", "View event", "_scheduled_time", "_uid",
+        "_competition_id", "_comp_end", "_source", "_source_event_id", "_partnership_id", "_followed_names",
     ]
     if not person_ids:
         return pd.DataFrame(columns=columns)
@@ -3107,6 +3114,14 @@ def heats_for_followed_people(session, person_ids: list[int]) -> pd.DataFrame:
             )
             if pid in followed and pid in names
         ]
+        # Everyone in the couple, including a Pro-Am student (who is listed
+        # separately from the leader/follower in some loads) -- the heat
+        # detail and "who's on the floor" views want the whole couple.
+        couple_ids = [
+            pid
+            for pid in dict.fromkeys([partnership.leader_id, partnership.follower_id, partnership.student_id])
+            if pid in names
+        ]
         t = heat.scheduled_time
         out.append(
             {
@@ -3115,7 +3130,8 @@ def heats_for_followed_people(session, person_ids: list[int]) -> pd.DataFrame:
                 "Time": t.strftime("%I:%M %p").lstrip("0") if t else "TBD",
                 "Competition": competition.name,
                 "Followed": ", ".join(mine),
-                "Couple": " & ".join(names[pid] for pid in members) or "(solo)",
+                "Couple": " & ".join(names[pid] for pid in (couple_ids if len(couple_ids) > len(members) else members))
+                or "(solo)",
                 "Event": heat.event_name,
                 "Round": heat.round_name,
                 "Heat #": heat.heat_number,
@@ -3127,6 +3143,12 @@ def heats_for_followed_people(session, person_ids: list[int]) -> pd.DataFrame:
                 # own unique constraint uses), so re-importing the calendar
                 # file updates a heat's calendar entry instead of duplicating it.
                 "_uid": f"heat-{heat.source}-{heat.source_event_id}-{heat.round_name}-{partnership.id}",
+                "_competition_id": competition.id,
+                "_comp_end": competition.end_date or competition.start_date,
+                "_source": heat.source,
+                "_source_event_id": heat.source_event_id,
+                "_partnership_id": partnership.id,
+                "_followed_names": mine,
             }
         )
     df = pd.DataFrame(out, columns=columns)
@@ -3192,7 +3214,24 @@ def _ics_fold(line: str) -> list[str]:
     return [parts[0]] + [" " + p for p in parts[1:]]
 
 
-def heats_to_ics(heats: pd.DataFrame, minutes_before: int, now: dt.datetime | None = None) -> bytes:
+def _as_date(value) -> dt.date | None:
+    """A date from a date/datetime/Timestamp, or None for blanks and NaT."""
+    if value is None or value is pd.NaT:
+        return None
+    if isinstance(value, dt.datetime):
+        return value.date()
+    if isinstance(value, dt.date):
+        return value
+    return None
+
+
+def heats_to_ics(
+    heats: pd.DataFrame,
+    minutes_before: int,
+    now: dt.datetime | None = None,
+    check_results: bool = False,
+    app_url: str = "",
+) -> bytes:
     """An iCalendar (.ics) file with one event per heat that has a
     published time and hasn't been danced yet, each with a reminder alarm
     `minutes_before` minutes ahead. Import it into the phone's Calendar and
@@ -3202,7 +3241,12 @@ def heats_to_ics(heats: pd.DataFrame, minutes_before: int, now: dt.datetime | No
     what an in-person event wants: 5:57 PM is 5:57 PM wherever the phone is
     set to be when the venue is local. Each event carries a stable UID, so
     importing an updated file replaces the earlier entries instead of
-    adding duplicates when the schedule shifts."""
+    adding duplicates when the schedule shifts.
+
+    check_results adds one more entry per competition: a 9 AM reminder the
+    morning after the last day to look at the results and scoresheets --
+    the no-server stand-in for a "your results are up" alert (see
+    app_url, which the entry links to)."""
     stamp = (now or dt.datetime.now(dt.timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
     lines = [
         "BEGIN:VCALENDAR",
@@ -3239,9 +3283,882 @@ def heats_to_ics(heats: pd.DataFrame, minutes_before: int, now: dt.datetime | No
             "END:VALARM",
             "END:VEVENT",
         ]
+    if check_results and records:
+        by_competition: dict = {}
+        for row in records:
+            key = row.get("_competition_id", row["Competition"])
+            info = by_competition.setdefault(key, {"name": row["Competition"], "last": None})
+            day = _as_date(row.get("_comp_end")) or _as_date(row["_scheduled_time"])
+            if day is not None and (info["last"] is None or day > info["last"]):
+                info["last"] = day
+        for key, info in by_competition.items():
+            if info["last"] is None:
+                continue
+            check_at = dt.datetime.combine(info["last"] + dt.timedelta(days=1), dt.time(9, 0))
+            lines += [
+                "BEGIN:VEVENT",
+                f"UID:results-{key}@dancesport-wiki",
+                f"DTSTAMP:{stamp}",
+                f"DTSTART:{check_at:%Y%m%dT%H%M%S}",
+                f"DTEND:{check_at + dt.timedelta(minutes=15):%Y%m%dT%H%M%S}",
+                "SUMMARY:" + _ics_text(f"Check results - {info['name']}"),
+                "DESCRIPTION:"
+                + _ics_text("Results and scoresheets are usually posted within a day or two of the event."),
+            ]
+            if app_url:
+                lines.append("URL:" + app_url)  # a URI value, not TEXT: no escaping
+            lines += [
+                "BEGIN:VALARM",
+                "ACTION:DISPLAY",
+                "DESCRIPTION:" + _ics_text(f"Check results - {info['name']}"),
+                "TRIGGER:PT0M",
+                "END:VALARM",
+                "END:VEVENT",
+            ]
     lines.append("END:VCALENDAR")
     folded = [piece for line in lines for piece in _ics_fold(line)]
     return ("\r\n".join(folded) + "\r\n").encode("utf-8")
+
+
+_PRODUCTION_URL = "https://dancesport-wiki-frkviu6vltuc36vfidedf2.streamlit.app/"
+_SEEN_PARAM = "seen"
+_DEFAULT_ALERT_DAYS = 7
+# A heat that started a few minutes ago is still "on the floor"; older than
+# this and an un-ticked heat is more likely a stale flag than a live heat.
+_ON_FLOOR_GRACE_MINUTES = 15
+_ALL_COMPETITIONS = "All competitions"
+
+
+def _app_base_url() -> str:
+    """The address people should share: this app's own address, except when
+    running on this computer (a localhost link means nothing to anyone
+    else), where the live site's address is used instead."""
+    try:
+        url = st.context.url
+    except Exception:
+        url = None
+    if url:
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower()
+        if host and host not in ("localhost", "127.0.0.1", "::1") and not host.endswith(".localhost"):
+            return urlunsplit((parts.scheme, parts.netloc, parts.path or "/", "", ""))
+    return _PRODUCTION_URL
+
+
+def follow_share_url(ids: list[int], base: str) -> str:
+    """The address that opens straight onto this follow list."""
+    base = base if base.endswith("/") else base + "/"
+    if not ids:
+        return base
+    return f"{base}?{_FOLLOW_PARAM}=" + ",".join(str(i) for i in ids)
+
+
+def _venue_now() -> dt.datetime:
+    """"Now" as a plain local clock time, comparable with the floating
+    (time-zone-less) heat times. Uses the visitor's own browser time zone --
+    at a venue that is the venue's -- falling back to U.S. Eastern, where
+    most NDCA events run, when the browser doesn't say."""
+    zone = None
+    try:
+        name = st.context.timezone
+        if name:
+            zone = ZoneInfo(name)
+    except Exception:
+        zone = None
+    if zone is None:
+        try:
+            zone = ZoneInfo("America/New_York")
+        except Exception:
+            return dt.datetime.now()
+    return dt.datetime.now(zone).replace(tzinfo=None)
+
+
+def _py_datetime(value) -> dt.datetime | None:
+    """A plain datetime from a datetime/Timestamp, or None for blanks/NaT."""
+    if value is None or value is pd.NaT:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return pd.Timestamp(value).to_pydatetime()
+
+
+def _clock(t: dt.datetime) -> str:
+    return t.strftime("%I:%M %p").lstrip("0")
+
+
+# ---- 1. choosing which heats to show / remind about ----
+
+
+def filter_heats(heats: pd.DataFrame, competition: str | None = None, days=None) -> pd.DataFrame:
+    """Narrows a heats table to one competition and/or a set of days --
+    what the Following page's pickers feed both the list and the calendar
+    file (an instructor following many students has hundreds of heats
+    across several events; nobody wants them all in one calendar import)."""
+    out = heats
+    if competition and competition != _ALL_COMPETITIONS:
+        out = out[out["Competition"] == competition]
+    if days:
+        out = out[out["Date"].isin(list(days))]
+    return out.reset_index(drop=True)
+
+
+# ---- 3. what's coming up next ----
+
+
+def _starts_in_label(start: dt.datetime, now: dt.datetime) -> str:
+    minutes = int((start - now).total_seconds() // 60)
+    if minutes < 1:
+        ago = -minutes
+        return "On the floor now" if ago <= 1 else f"Started {ago} min ago"
+    if minutes < 60:
+        return f"in {minutes} min"
+    if minutes < 24 * 60:
+        hours, rest = divmod(minutes, 60)
+        return f"in {hours} h {rest} min" if rest else f"in {hours} h"
+    return f"{start:%a %b} {start.day}, {_clock(start)}"
+
+
+def next_up_for_followed(heats: pd.DataFrame, now: dt.datetime) -> pd.DataFrame:
+    """One row per followed dancer: their next heat that hasn't been danced
+    yet, with how long until it starts. A heat that began up to
+    _ON_FLOOR_GRACE_MINUTES ago still counts (they may be on the floor); an
+    older un-ticked heat is skipped as probably stale. A heat with no
+    published time is used only if the dancer has nothing timed left."""
+    columns = ["Dancer", "Starts", "Time", "Day", "Couple", "Event", "Round", "Heat #", "Floor", "Competition"]
+    if heats.empty:
+        return pd.DataFrame(columns=columns)
+    cutoff = now - dt.timedelta(minutes=_ON_FLOOR_GRACE_MINUTES)
+    best: dict[str, tuple] = {}
+    everyone: list[str] = []
+    for row in heats.to_dict("records"):
+        names = list(row.get("_followed_names") or [])
+        if not names and row.get("Followed"):
+            names = [row["Followed"]]
+        for name in names:
+            if name not in everyone:
+                everyone.append(name)
+        if row["Danced"] != "No":
+            continue
+        start = _py_datetime(row["_scheduled_time"])
+        if start is None:
+            key = (1, dt.datetime.max)
+        elif start >= cutoff:
+            key = (0, start)
+        else:
+            continue
+        for name in names:
+            if name not in best or key < best[name][0]:
+                best[name] = (key, start, row)
+    out = []
+    for name in everyone:
+        if name not in best:
+            out.append(
+                {c: "" for c in columns} | {"Dancer": name, "Starts": "No more heats on file", "_sort": (2, dt.datetime.max)}
+            )
+            continue
+        key, start, row = best[name]
+        out.append(
+            {
+                "Dancer": name,
+                "Starts": _starts_in_label(start, now) if start is not None else "Time not published yet",
+                "Time": _clock(start) if start is not None else "TBD",
+                "Day": f"{start:%A}" if start is not None else "",
+                "Couple": row["Couple"],
+                "Event": row["Event"],
+                "Round": row["Round"],
+                "Heat #": row["Heat #"],
+                "Floor": row["Floor"],
+                "Competition": row["Competition"],
+                "_sort": key,
+            }
+        )
+    out.sort(key=lambda r: r["_sort"])
+    return pd.DataFrame(out, columns=columns)
+
+
+# ---- 4. sharing the list ----
+
+# ---- 5. phone-friendly heat cards ----
+
+_MD_SPECIALS = re.compile(r"([\\`*_{}\[\]()#+!|<>$~])")
+
+
+def _md(text) -> str:
+    """Escapes text for Streamlit markdown (a "$" in an event title would
+    otherwise start a math formula, "_"/"*" would italicize)."""
+    return _MD_SPECIALS.sub(r"\\\1", "" if text is None else str(text))
+
+
+def heat_card_markdown(row: dict) -> str:
+    """One heat as a short, narrow-screen-friendly block: time and
+    heat/floor on top, who, then the event. No wide table to scroll."""
+    top = [f"**{_md(row['Time'])}**"]
+    if row.get("Heat #"):
+        top.append(f"Heat {_md(row['Heat #'])}")
+    if row.get("Floor"):
+        top.append(f"Floor {_md(row['Floor'])}")
+    if row.get("Danced") == "Yes":
+        top.append("✓ danced")
+    return (
+        "  ·  ".join(top)
+        + f"  \n{_md(row['Couple'])}"
+        + f"  \n{_md(row['Event'])} ({_md(row['Round'])})"
+    )
+
+
+def heat_choice_label(row: dict) -> str:
+    when = f"{row['Day']} {row['Time']}" if row.get("Day") else "Time TBD"
+    heat = f"Heat {row['Heat #']}" if row.get("Heat #") else "Heat ?"
+    return f"{when} · {heat} · {row['Event']} ({row['Round']}) · {row['Couple']}"
+
+
+# ---- 2. who's on the floor ----
+
+
+def _competitor_sort_key(number) -> tuple:
+    text = str(number or "").strip()
+    return (0, int(text), "") if text.isdigit() else (1, 0, text)
+
+
+def _minute_window(when) -> tuple[dt.datetime, dt.datetime] | None:
+    """[start, end) of the clock minute containing `when` -- heat times
+    carry seconds ("5:26:54 PM"), and two heats a few seconds apart are
+    "at the same time" to anyone standing at the venue."""
+    start = _py_datetime(when)
+    if start is None:
+        return None
+    start = start.replace(second=0, microsecond=0)
+    return start, start + dt.timedelta(minutes=1)
+
+
+def heat_field(
+    session,
+    competition_id: int,
+    heat_number,
+    when,
+    source: str,
+    source_event_id: str,
+    round_name: str,
+) -> pd.DataFrame:
+    """Every couple on the floor in one heat, ordered with the selected
+    event first. A heat number covers several divisions dancing the same
+    routine together (e.g. a Bronze and a Silver event in Heat 346), so this
+    is the whole heat -- "_same_event" marks the couples actually competing
+    against each other in the selected event and round. With no heat number
+    on file it falls back to just that event round."""
+    columns = ["Couple", "Comp #", "Event", "Partner", "_partnership_id", "_same_event"]
+    stmt = (
+        select(ScheduledHeat, Partnership)
+        .join(Partnership, ScheduledHeat.partnership_id == Partnership.id)
+        .where(ScheduledHeat.competition_id == competition_id)
+    )
+    window = _minute_window(when)
+    if heat_number is not None and not pd.isna(heat_number) and str(heat_number) and window is not None:
+        stmt = stmt.where(
+            ScheduledHeat.heat_number == str(heat_number),
+            ScheduledHeat.scheduled_time >= window[0],
+            ScheduledHeat.scheduled_time < window[1],
+        )
+    else:
+        stmt = stmt.where(
+            ScheduledHeat.source == source,
+            ScheduledHeat.source_event_id == source_event_id,
+            ScheduledHeat.round_name == round_name,
+        )
+    rows = session.execute(stmt).all()
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    names = _person_names(
+        session,
+        {pid for _, p in rows for pid in (p.leader_id, p.follower_id, p.student_id) if pid is not None},
+    )
+    out = []
+    for heat, partnership in rows:
+        members = [
+            names[pid]
+            for pid in dict.fromkeys([partnership.leader_id, partnership.follower_id, partnership.student_id])
+            if pid in names
+        ]
+        link_person = partnership.leader_id if partnership.leader_id is not None else partnership.follower_id
+        out.append(
+            {
+                "Couple": " & ".join(members) or "(solo)",
+                "Comp #": heat.competitor_no,
+                "Event": heat.event_name,
+                "Partner": f"?person_id={link_person}&partnership_id={partnership.id}" if link_person else None,
+                "_partnership_id": partnership.id,
+                "_same_event": heat.source == source
+                and heat.source_event_id == source_event_id
+                and heat.round_name == round_name,
+            }
+        )
+    out.sort(key=lambda r: (not r["_same_event"], r["Event"], _competitor_sort_key(r["Comp #"])))
+    return pd.DataFrame(out, columns=columns)
+
+
+def heats_at_same_time(session, competition_id: int, when, heat_number) -> pd.DataFrame:
+    """Other heats (other floors) starting in the same clock minute, so a
+    dancer or coach can see what else is on at once. One row per heat
+    number and floor."""
+    columns = ["Heat #", "Floor", "Events", "Couples", "First event"]
+    window = _minute_window(when)
+    if window is None:
+        return pd.DataFrame(columns=columns)
+    rows = session.execute(
+        select(ScheduledHeat.heat_number, ScheduledHeat.floor, ScheduledHeat.source_event_id, ScheduledHeat.event_name)
+        .where(
+            ScheduledHeat.competition_id == competition_id,
+            ScheduledHeat.scheduled_time >= window[0],
+            ScheduledHeat.scheduled_time < window[1],
+        )
+    ).all()
+    heats: dict[tuple, dict] = {}
+    for number, floor, event_id, event_name in rows:
+        if heat_number is not None and not pd.isna(heat_number) and str(number) == str(heat_number):
+            continue
+        info = heats.setdefault((number, floor), {"events": set(), "couples": 0, "first": event_name})
+        info["events"].add(event_id)
+        info["couples"] += 1
+        info["first"] = min(info["first"], event_name)
+    out = [
+        {"Heat #": number, "Floor": floor, "Events": len(info["events"]), "Couples": info["couples"], "First event": info["first"]}
+        for (number, floor), info in heats.items()
+    ]
+    df = pd.DataFrame(out, columns=columns)
+    return df.sort_values(["Floor", "Heat #"], kind="stable").reset_index(drop=True)
+
+
+# ---- 6. scouting the field ----
+
+_PLACEMENT_NUMBER = re.compile(r"^\d+(\.\d+)?(-\d+(\.\d+)?)?$")
+
+
+def _placement_number(value) -> float | None:
+    """The finalist placement a history cell stands for ("3" -> 3.0, "2-3" ->
+    2.0, the high end of a tie ignored), or None for a not-recalled
+    standing like "9th (10 marks)"."""
+    text = str(value).strip()
+    if not _PLACEMENT_NUMBER.match(text):
+        return None
+    return float(text.split("-")[0])
+
+
+def head_to_head_records(session, our_partnership_id: int, rival_ids: list[int]) -> dict[int, dict[str, int]]:
+    """For each rival couple: in how many events both were entered, and in
+    how many the first couple finished ahead / behind / level. A couple
+    that placed in the final finished ahead of one that wasn't recalled;
+    two not-recalled couples count as level (their order isn't official)."""
+    rivals = [r for r in dict.fromkeys(rival_ids) if r != our_partnership_id]
+    if not rivals:
+        return {}
+    rows = session.execute(
+        select(Entry.partnership_id, Result.comp_event_id, Result.placement_low)
+        .select_from(Result)
+        .join(Entry, Result.entry_id == Entry.id)
+        .where(Entry.partnership_id.in_([our_partnership_id] + rivals))
+    ).all()
+    by_event: dict[int, dict[int, int | None]] = {}
+    for partnership_id, comp_event_id, low in rows:
+        by_event.setdefault(comp_event_id, {})[partnership_id] = low
+    records = {r: {"met": 0, "ahead": 0, "behind": 0, "even": 0} for r in rivals}
+    for placements in by_event.values():
+        if our_partnership_id not in placements:
+            continue
+        ours = placements[our_partnership_id]
+        for rival in rivals:
+            if rival not in placements:
+                continue
+            theirs = placements[rival]
+            record = records[rival]
+            record["met"] += 1
+            if ours is None and theirs is None:
+                record["even"] += 1
+            elif theirs is None or (ours is not None and ours < theirs):
+                record["ahead"] += 1
+            elif ours is None or ours > theirs:
+                record["behind"] += 1
+            else:
+                record["even"] += 1
+    return records
+
+
+def scouting_report(
+    session, db_identity: str, our_partnership_id: int, field: pd.DataFrame, today: dt.date | None = None
+) -> pd.DataFrame:
+    """Recent form (last 12 months) and head-to-head history for every other
+    couple in a heat's field, strongest first."""
+    columns = [
+        "Couple", "Comp #", "Results (12 mo)", "Finals", "Best", "Avg finish", "Most recent",
+        "Met before", "Ahead of them", "Behind them", "Partner",
+    ]
+    rivals = field[field["_partnership_id"] != our_partnership_id]
+    if rivals.empty:
+        return pd.DataFrame(columns=columns)
+    rival_ids = [int(x) for x in rivals["_partnership_id"]]
+    since = (today or dt.date.today()) - dt.timedelta(days=365)
+    histories = result_histories_for_partnerships(session, db_identity, rival_ids, since)
+    h2h = head_to_head_records(session, our_partnership_id, rival_ids)
+    out = []
+    for row in rivals.to_dict("records"):
+        history = histories.get(int(row["_partnership_id"]))
+        if history is None:
+            history = pd.DataFrame()
+        record = h2h.get(int(row["_partnership_id"]), {"met": 0, "ahead": 0, "behind": 0, "even": 0})
+        # Not Series.map: it turns "no finalist placement" (None) into NaN,
+        # which then slips past an "is not None" test.
+        placed = (
+            [n for n in (_placement_number(v) for v in history["Placement"]) if n is not None]
+            if not history.empty
+            else []
+        )
+        if history.empty:
+            recent = "No results in the last 12 months"
+        else:
+            last = history.iloc[0]
+            recent = f"{last['Placement']} at {last['Competition']} ({last['Date']:%b} {last['Date'].day}, {last['Date'].year})"
+        out.append(
+            {
+                "Couple": row["Couple"],
+                "Comp #": row["Comp #"],
+                "Results (12 mo)": len(history),
+                "Finals": len(placed),
+                "Best": int(min(placed)) if placed else None,
+                "Avg finish": round(sum(placed) / len(placed), 1) if placed else None,
+                "Most recent": recent,
+                "Met before": record["met"],
+                "Ahead of them": record["ahead"],
+                "Behind them": record["behind"],
+                "Partner": row["Partner"],
+            }
+        )
+    df = pd.DataFrame(out, columns=columns)
+    df["_sort"] = df["Avg finish"].fillna(float("inf"))
+    return df.sort_values("_sort", kind="stable").drop(columns="_sort").reset_index(drop=True)
+
+
+# ---- 7. progress over time ----
+
+
+def marks_share_by_competition(session, partnership_id: int) -> pd.DataFrame:
+    """For each competition: the share of judge marks (non-Final rounds)
+    that went to this couple -- how often judges marked them, a steadier
+    yardstick of improvement than placement, which depends on who else
+    entered."""
+    columns = ["Date", "Competition", "Marks received", "Marks possible", "Share of marks (%)"]
+    rows = session.execute(
+        select(
+            Competition.name,
+            Competition.start_date,
+            func.sum(case((Mark.recalled.is_(True), 1), else_=0)),
+            func.count(),
+        )
+        .select_from(Mark)
+        .join(Entry, Mark.entry_id == Entry.id)
+        .join(Round, Mark.round_id == Round.id)
+        .join(CompEvent, Round.comp_event_id == CompEvent.id)
+        .join(Competition, CompEvent.competition_id == Competition.id)
+        .where(Entry.partnership_id == partnership_id, Mark.recalled.is_not(None))
+        .group_by(Competition.id, Competition.name, Competition.start_date)
+    ).all()
+    out = [
+        {
+            "Date": start,
+            "Competition": name,
+            "Marks received": int(got or 0),
+            "Marks possible": int(total),
+            "Share of marks (%)": round(100.0 * int(got or 0) / int(total), 1) if total else None,
+        }
+        for name, start, got, total in rows
+    ]
+    return pd.DataFrame(out, columns=columns)
+
+
+def progress_by_competition(history: pd.DataFrame, marks: pd.DataFrame) -> pd.DataFrame:
+    """One row per competition, oldest first: how many events, how many
+    finals, best and average finish, and share of marks."""
+    columns = [
+        "Date", "Competition", "Events", "Finals", "Best placement", "Average finish", "Share of marks (%)",
+    ]
+    if history.empty:
+        return pd.DataFrame(columns=columns)
+    h = history.copy()
+    h["_n"] = h["Placement"].map(_placement_number)
+    grouped = (
+        h.groupby(["Date", "Competition"], sort=False)
+        .agg(Events=("Event", "count"), Finals=("_n", "count"), Best=("_n", "min"), Avg=("_n", "mean"))
+        .reset_index()
+    )
+    grouped = grouped.rename(columns={"Best": "Best placement", "Avg": "Average finish"})
+    grouped["Average finish"] = grouped["Average finish"].round(1)
+    if marks is not None and not marks.empty:
+        grouped = grouped.merge(
+            marks[["Date", "Competition", "Share of marks (%)"]], on=["Date", "Competition"], how="left"
+        )
+    else:
+        grouped["Share of marks (%)"] = None
+    return grouped[columns].sort_values("Date", kind="stable").reset_index(drop=True)
+
+
+def trend_sentence(progress: pd.DataFrame, column: str, label: str, higher_is_better: bool) -> str | None:
+    """"Share of marks: 58.0 -> 66.5 (up)": the latest few competitions
+    against the few before them. None when there isn't enough history."""
+    series = progress[column].dropna()
+    n = len(series)
+    if n < 2:
+        return None
+    k = min(3, n // 2)
+    recent, prior = series.iloc[-k:].mean(), series.iloc[-2 * k : -k].mean()
+    delta = recent - prior
+    if abs(delta) < 0.05:
+        verdict = "holding steady"
+    else:
+        improved = (delta > 0) == higher_is_better
+        verdict = "improving" if improved else "slipping"
+    return f"{label}: {prior:.1f} → {recent:.1f} ({verdict}; last {k} competition{'s' if k > 1 else ''} vs. the {k} before)"
+
+
+def _progress_chart(df: pd.DataFrame, column: str, title: str, reverse: bool = False):
+    chart_df = df.dropna(subset=[column]).copy()
+    chart_df["Date"] = pd.to_datetime(chart_df["Date"])
+    return (
+        alt.Chart(chart_df)
+        .mark_line(point=True)
+        .encode(
+            x=alt.X("Date:T", title=None),
+            y=alt.Y(f"{column}:Q", title=title, scale=alt.Scale(reverse=reverse, zero=False)),
+            tooltip=["Competition", alt.Tooltip(f"{column}:Q", title=title, format=".1f")],
+        )
+        .properties(height=220)
+    )
+
+
+# ---- 8. who beat us, and by how many marks ----
+
+
+def marks_gap_between(
+    tab: pd.DataFrame, routine: pd.DataFrame, our_entry_id: int, rival_entry_id: int, round_label: str
+) -> tuple[str, str]:
+    """(gap in the couple's last round, the dance that cost the most) against
+    one rival. Non-Final rounds count marks (more is better); the Final is a
+    sum of per-dance placements (lower is better, and not the official
+    skating result)."""
+    if tab is None or tab.empty or round_label not in tab.columns:
+        return ("no scoresheet on file", "")
+    mine = tab.loc[tab["_entry_id"] == our_entry_id, round_label]
+    theirs = tab.loc[tab["_entry_id"] == rival_entry_id, round_label]
+    if mine.empty or theirs.empty or pd.isna(mine.iloc[0]) or pd.isna(theirs.iloc[0]):
+        return ("not comparable (different rounds)", "")
+    ours, other = int(mine.iloc[0]), int(theirs.iloc[0])
+    is_final = round_label == "Final"
+    deficit = (ours - other) if is_final else (other - ours)  # positive = we are worse
+    def unit(n: int) -> str:
+        word = "placement point" if is_final else "mark"
+        return word if n == 1 else word + "s"
+
+    if deficit > 0:
+        gap = f"{deficit} {unit(deficit)} behind in the {round_label} ({ours} vs {other})"
+    elif deficit < 0:
+        gap = f"{-deficit} {unit(-deficit)} ahead in the {round_label}, but placed lower overall ({ours} vs {other})"
+    else:
+        gap = f"level in the {round_label} ({ours} each)"
+    biggest = ""
+    if routine is not None and not routine.empty:
+        prefix = f"{round_label} - "
+        worst: tuple[int, str] | None = None
+        for col in routine.columns:
+            if not str(col).startswith(prefix):
+                continue
+            a = routine.loc[routine["_entry_id"] == our_entry_id, col]
+            b = routine.loc[routine["_entry_id"] == rival_entry_id, col]
+            if a.empty or b.empty or pd.isna(a.iloc[0]) or pd.isna(b.iloc[0]):
+                continue
+            diff = (int(a.iloc[0]) - int(b.iloc[0])) if is_final else (int(b.iloc[0]) - int(a.iloc[0]))
+            if diff > 0 and (worst is None or diff > worst[0]):
+                worst = (diff, str(col)[len(prefix):])
+        biggest = f"{worst[1]} ({worst[0]} {unit(worst[0])})" if worst else "none -- level or ahead on every dance"
+    return (gap, biggest)
+
+
+def competition_recap(session, partnership_id: int, competition_id: int) -> pd.DataFrame:
+    """One row per event the couple danced at one competition: where they
+    placed, who finished ahead, and how far behind them they were on marks
+    in the couple's last round."""
+    columns = [
+        "Event", "Placement", "Highest round", "Couples ahead", "Closest couple ahead", "Gap to them",
+        "Biggest gap by dance", "View",
+    ]
+    events = session.execute(
+        select(CompEvent.id, CompEvent.raw_title)
+        .select_from(Result)
+        .join(Entry, Result.entry_id == Entry.id)
+        .join(CompEvent, Result.comp_event_id == CompEvent.id)
+        .where(Entry.partnership_id == partnership_id, CompEvent.competition_id == competition_id)
+        .order_by(CompEvent.raw_title)
+    ).all()
+    if not events:
+        return pd.DataFrame(columns=columns)
+    fields = _field_results_for_comp_events(session, [ce_id for ce_id, _ in events])
+    out = []
+    for comp_event_id, title in events:
+        field = fields.get(comp_event_id)
+        if field is None or field.empty:
+            continue
+        mine = field[field["_partnership_id"] == partnership_id]
+        if mine.empty:
+            continue
+        position = int(mine.index[0])
+        row = mine.iloc[0]
+        base = {
+            "Event": title,
+            "Placement": row["Placement"],
+            "Highest round": row["Highest round"],
+            "View": f"?competition_id={competition_id}&event_id={comp_event_id}",
+        }
+        if position == 0:
+            out.append(base | {"Couples ahead": 0, "Closest couple ahead": "(won it)", "Gap to them": "", "Biggest gap by dance": ""})
+            continue
+        closest = field.iloc[position - 1]
+        tab = marks_tabulation_for_event(session, comp_event_id)
+        routine = marks_by_routine_for_event(session, comp_event_id)
+        gap, biggest = marks_gap_between(tab, routine, row["_entry_id"], closest["_entry_id"], row["Highest round"])
+        out.append(
+            base
+            | {
+                "Couples ahead": position,
+                "Closest couple ahead": f"{closest['Couple']} ({closest['Placement']})",
+                "Gap to them": gap,
+                "Biggest gap by dance": biggest,
+            }
+        )
+    return pd.DataFrame(out, columns=columns)
+
+
+@st.cache_data(ttl=600)
+def competition_recap_cached(_session, db_identity: str, partnership_id: int, competition_id: int) -> pd.DataFrame:
+    return competition_recap(_session, partnership_id, competition_id)
+
+
+# ---- 9. what's new ----
+
+
+def _published_date(competition: Competition) -> dt.date | None:
+    if competition.source_updated_at is not None:
+        return competition.source_updated_at.date()
+    return competition.end_date or competition.start_date
+
+
+def new_results_since(session, person_ids: list[int], since: dt.date) -> pd.DataFrame:
+    """Results for any couple a followed person is in that were published
+    on or after `since`, newest first, with whether a judges' scoresheet is
+    available. "Published" is the source's own results-last-published time
+    when it has one, else the competition's last day."""
+    columns = ["Published", "Date", "Competition", "Couple", "Event", "Placement", "Scoresheet", "View"]
+    if not person_ids:
+        return pd.DataFrame(columns=columns)
+    db_identity = _db_identity(session)
+    partnerships = {}
+    for pid in person_ids:
+        for partnership in partnerships_for_person(session, db_identity, pid):
+            partnerships[partnership.id] = partnership
+    if not partnerships:
+        return pd.DataFrame(columns=columns)
+    # Pull a generous window (results can be published weeks after the event)
+    # and apply the exact "published" test in Python.
+    window_start = since - dt.timedelta(days=120)
+    rows = session.execute(
+        select(Competition, CompEvent, Entry, Result)
+        .select_from(Result)
+        .join(Entry, Result.entry_id == Entry.id)
+        .join(CompEvent, Result.comp_event_id == CompEvent.id)
+        .join(Competition, CompEvent.competition_id == Competition.id)
+        .where(Entry.partnership_id.in_(list(partnerships)), Competition.start_date >= window_start)
+    ).all()
+    fresh = [(c, ce, e, r) for c, ce, e, r in rows if (_published_date(c) or dt.date.min) >= since]
+    if not fresh:
+        return pd.DataFrame(columns=columns)
+    scored = set(
+        session.execute(
+            select(Mark.entry_id, Round.comp_event_id)
+            .join(Round, Mark.round_id == Round.id)
+            .where(Mark.entry_id.in_({e.id for _, _, e, _ in fresh}))
+            .distinct()
+        ).all()
+    )
+    out = []
+    for competition, comp_event, entry, result in fresh:
+        if result.placement_low is None:
+            placement = "not recalled"
+        elif result.placement_low == result.placement_high:
+            placement = str(result.placement_low)
+        else:
+            placement = f"{result.placement_low}-{result.placement_high}"
+        out.append(
+            {
+                "Published": _published_date(competition),
+                "Date": competition.start_date,
+                "Competition": competition.name,
+                "Couple": partner_label(session, partnerships[entry.partnership_id]),
+                "Event": comp_event.raw_title,
+                "Placement": placement,
+                "Scoresheet": "Yes" if (entry.id, comp_event.id) in scored else "No",
+                "View": f"?competition_id={competition.id}&event_id={comp_event.id}",
+            }
+        )
+    df = pd.DataFrame(out, columns=columns)
+    return df.sort_values(["Published", "Date"], ascending=False, kind="stable").reset_index(drop=True)
+
+
+def _seen_date() -> dt.date:
+    raw = st.query_params.get(_SEEN_PARAM)
+    try:
+        return dt.date.fromisoformat(raw) if raw else _venue_now().date() - dt.timedelta(days=_DEFAULT_ALERT_DAYS)
+    except ValueError:
+        return _venue_now().date() - dt.timedelta(days=_DEFAULT_ALERT_DAYS)
+
+
+def _mark_seen() -> None:
+    st.query_params[_SEEN_PARAM] = _venue_now().date().isoformat()
+
+
+# ---- the page ----
+
+
+def _couple_progress_and_recap(session, partnership: Partnership, key_prefix: str) -> None:
+    """Progress over time and a per-competition "who beat us" recap for one
+    couple -- shared by the Following page and a couple's own Dancer page."""
+    db_identity = _db_identity(session)
+    history = result_history_for_partnership(session, partnership.id)
+    label = partner_label(session, partnership)
+    if history.empty:
+        st.write("No results on file for this couple yet.")
+        return
+    progress_tab, recap_tab = st.tabs(["Progress over time", "Competition recap"])
+
+    with progress_tab:
+        marks = marks_share_by_competition(session, partnership.id)
+        progress = progress_by_competition(history, marks)
+        if len(progress) < 2:
+            st.write("Progress needs results from at least two competitions.")
+        else:
+            for sentence in (
+                trend_sentence(progress, "Share of marks (%)", "Share of judges' marks (%)", True),
+                trend_sentence(progress, "Average finish", "Average finish in finals (lower is better)", False),
+            ):
+                if sentence:
+                    st.write(sentence)
+            if progress["Share of marks (%)"].notna().sum() >= 2:
+                st.altair_chart(
+                    _progress_chart(progress, "Share of marks (%)", "Share of judges' marks (%)"),
+                    use_container_width=True,
+                )
+            if progress["Average finish"].notna().sum() >= 2:
+                st.altair_chart(
+                    _progress_chart(progress, "Average finish", "Average finish in finals (up is better)", reverse=True),
+                    use_container_width=True,
+                )
+        st.dataframe(progress.sort_values("Date", ascending=False), use_container_width=True, hide_index=True)
+        st.caption(
+            "Share of marks is the fraction of judge marks in the early rounds (recall rounds) that went to this "
+            "couple -- only events that had recall rounds count, since a straight-to-the-final event has none. "
+            "Average finish uses only events where they placed in a final."
+        )
+
+    with recap_tab:
+        competitions: dict[int, str] = {}
+        for _, row in history.sort_values("Date", ascending=False).iterrows():
+            match = re.search(r"competition_id=(\d+)", str(row["View"]))
+            if match and int(match.group(1)) not in competitions:
+                competitions[int(match.group(1))] = f"{row['Competition']} ({row['Date']:%b} {row['Date'].day}, {row['Date'].year})"
+        choice = st.selectbox(
+            "Competition", list(competitions), format_func=competitions.get, key=f"{key_prefix}_recap_comp"
+        )
+        recap = competition_recap_cached(session, db_identity, partnership.id, int(choice))
+        if recap.empty:
+            st.write("No results on file at that competition.")
+        else:
+            st.dataframe(recap, use_container_width=True, hide_index=True, column_config=_VIEW_LINK_COLUMN_CONFIG)
+            _download_buttons(
+                recap,
+                [c for c in recap.columns if c != "View"],
+                f"{label} recap - {competitions[int(choice)]}",
+                f"{label}: who finished ahead -- {competitions[int(choice)]}",
+                key=f"{key_prefix}_recap_{partnership.id}_{choice}",
+            )
+        st.caption(
+            "\"Gap to them\" compares marks in the round this couple's run ended in, against the couple that finished "
+            "just ahead of them. In a final the numbers are sums of the judges' per-dance placements (lower is "
+            "better) -- not the official skating-system result."
+        )
+
+
+def _heat_details(session, db_identity: str, heats: pd.DataFrame, now: dt.datetime) -> None:
+    """Pick one heat: who is on the floor, what else is on at the same time,
+    and (optionally) how each rival has been doing."""
+    records = heats.to_dict("records")
+    labels: list[str] = []
+    for i, row in enumerate(records):
+        label = heat_choice_label(row)
+        labels.append(label if label not in labels else f"{label} (#{i + 1})")
+    cutoff = now - dt.timedelta(minutes=_ON_FLOOR_GRACE_MINUTES)
+    default = 0
+    for i, row in enumerate(records):
+        start = _py_datetime(row["_scheduled_time"])
+        if row["Danced"] == "No" and start is not None and start >= cutoff:
+            default = i
+            break
+    choice = st.selectbox("Pick a heat", range(len(labels)), index=default, format_func=labels.__getitem__, key="follow_heat_choice")
+    row = records[int(choice)]
+    field = heat_field(
+        session, row["_competition_id"], row["Heat #"], row["_scheduled_time"],
+        row["_source"], row["_source_event_id"], row["Round"],
+    )
+    followed_partnerships = {r["_partnership_id"] for r in records}
+    st.markdown(heat_card_markdown(row))
+    if field.empty:
+        st.write("No other couples on file for this heat.")
+    else:
+        field = field.copy()
+        field.insert(0, "★", ["★" if pid in followed_partnerships else "" for pid in field["_partnership_id"]])
+        same_event_count = int(field["_same_event"].sum())
+        st.write(
+            f"**Who's on the floor ({len(field)} couple{'s' if len(field) != 1 else ''}"
+            + (f", {same_event_count} in this event" if len(field) != same_event_count else "")
+            + ")**"
+        )
+        field_display = field.assign(**{"In this event": field["_same_event"].map({True: "Yes", False: ""})})
+        mixed = len(field) != same_event_count
+        st.dataframe(
+            field_display[["★", "Couple", "Comp #"] + (["Event", "In this event"] if mixed else []) + ["Partner"]],
+            use_container_width=True,
+            hide_index=True,
+            column_config=_PARTNER_LINK_COLUMN_CONFIG,
+        )
+        if mixed:
+            st.caption(
+                "A heat often has several divisions dancing the same routine together; only the couples marked "
+                "\"Yes\" are competing against each other in the selected event."
+            )
+    same_time = heats_at_same_time(session, row["_competition_id"], row["_scheduled_time"], row["Heat #"])
+    if not same_time.empty:
+        st.write("**Also on at the same time (other floors)**")
+        st.dataframe(same_time, use_container_width=True, hide_index=True)
+    if not field.empty and st.toggle(
+        "Scout the field: recent form and head-to-head history", key=f"follow_scout_{row['_uid']}"
+    ):
+        with st.spinner("Looking up each couple's recent results..."):
+            rivals = field[field["_same_event"]]
+            report = scouting_report(session, db_identity, int(row["_partnership_id"]), rivals, today=now.date())
+        if report.empty:
+            st.write("No other couples to scout in this heat.")
+        else:
+            st.dataframe(report, use_container_width=True, hide_index=True, column_config=_PARTNER_LINK_COLUMN_CONFIG)
+            st.caption(
+                f"Strongest recent form first. \"Ahead of them\" and \"Behind them\" count the events both couples "
+                f"entered where {row['Couple']} finished ahead of or behind that couple."
+            )
 
 
 def following_page(session) -> None:
@@ -3279,46 +4196,153 @@ def following_page(session) -> None:
         row[0].write(names.get(pid, f"(unknown dancer {pid})"))
         row[1].button("Unfollow", key=f"unfollow_{pid}", on_click=_unfollow, args=(pid,))
 
+    base_url = _app_base_url()
+    share_url = follow_share_url(ids, base_url)
+    with st.expander("Share this list"):
+        st.write("Send this link to anyone and it opens on the same list of dancers:")
+        st.code(share_url, language=None)  # the box has a copy button
+        mail_subject = quote("Dancers I'm following on DanceSport Wiki")
+        mail_body = quote(f"Here's my list of dancers and their heats: {share_url}")
+        st.link_button("Email this link", f"mailto:?subject={mail_subject}&body={mail_body}")
+
+    # ---- what's new (results and scoresheets) ----
+    seen = _seen_date()
+    new_results = new_results_since(session, ids, seen)
+    st.subheader("What's new")
+    if new_results.empty:
+        st.write(f"No new results for these dancers since {seen:%b} {seen.day}.")
+    else:
+        with_sheets = int((new_results["Scoresheet"] == "Yes").sum())
+        st.success(
+            f"{len(new_results)} new result{'s' if len(new_results) != 1 else ''} since {seen:%b} {seen.day}"
+            + (f" -- {with_sheets} with judges' scoresheets." if with_sheets else ".")
+        )
+        st.dataframe(
+            new_results.head(100), use_container_width=True, hide_index=True, column_config=_VIEW_LINK_COLUMN_CONFIG
+        )
+    st.button("Mark all as seen", key="follow_mark_seen", on_click=_mark_seen)
+    st.caption(
+        "This page can't send you a message on its own, but it keeps track of what you haven't looked at yet: "
+        "the date above is saved in this page's address along with your list. The calendar download below can "
+        "also add a \"check results\" reminder for the morning after each competition."
+    )
+
     heats = heats_for_followed_people(session, ids)
-    st.subheader("Upcoming and current heats")
+    now = _venue_now()
+
+    # ---- next up ----
+    st.subheader("Coming up next")
     if heats.empty:
         st.write(
             "No heats on file for these dancers. Heat lists are published about two weeks before a "
             "competition, so check back closer to the event."
         )
     else:
-        show_cols = ["Time", "Heat #", "Followed", "Couple", "Event", "Round", "Floor", "Danced", "View event"]
-        dated = heats[heats["Date"].notna()]
-        for (competition_name, date), group in dated.groupby(["Competition", "Date"], sort=False):
-            st.write(f"**{group['Day'].iloc[0]}, {date:%b} {date.day} -- {competition_name}**")
-            st.dataframe(
-                group[show_cols],
-                use_container_width=True,
-                hide_index=True,
-                column_config=_HEAT_EVENT_LINK_COLUMN_CONFIG,
-            )
-        undated = heats[heats["Date"].isna()]
-        if not undated.empty:
-            st.write("**Time not yet published**")
-            st.dataframe(
-                undated[show_cols],
-                use_container_width=True,
-                hide_index=True,
-                column_config=_HEAT_EVENT_LINK_COLUMN_CONFIG,
-            )
+        next_up = next_up_for_followed(heats, now)
+        for card in next_up.to_dict("records"):
+            if card["Time"]:
+                st.markdown(
+                    f"**{_md(card['Dancer'])}** -- {_md(card['Starts'])}  \n"
+                    f"{_md(card['Day'])} {_md(card['Time'])}"
+                    + (f"  ·  Heat {_md(card['Heat #'])}" if card["Heat #"] else "")
+                    + (f"  ·  Floor {_md(card['Floor'])}" if card["Floor"] else "")
+                    + f"  \n{_md(card['Couple'])} -- {_md(card['Event'])} ({_md(card['Round'])})"
+                    + f"  \n{_md(card['Competition'])}"
+                )
+            else:
+                st.markdown(f"**{_md(card['Dancer'])}** -- {_md(card['Starts'])}")
+        st.button("↻ Refresh", key="follow_refresh")
+        st.caption(f"Times are the venue's local time. It is {_clock(now)} on your device's clock.")
 
-        upcoming_count = int(((heats["Danced"] == "No") & heats["_scheduled_time"].notna()).sum())
+        # ---- the heat list, with competition/day pickers ----
+        st.subheader("All heats")
+        competitions = list(dict.fromkeys(heats.sort_values("_scheduled_time", na_position="last")["Competition"]))
+        upcoming_now = heats[(heats["Danced"] == "No") & heats["_scheduled_time"].notna()]
+        default_competition = upcoming_now["Competition"].iloc[0] if not upcoming_now.empty else competitions[0]
+        options = [_ALL_COMPETITIONS] + competitions
+        competition_choice = st.selectbox(
+            "Competition", options, index=options.index(default_competition), key="follow_comp_filter"
+        )
+        in_competition = filter_heats(heats, competition_choice)
+        day_options = sorted({d for d in in_competition["Date"] if d is not None and not pd.isna(d)})
+        day_choice = st.multiselect(
+            "Days",
+            day_options,
+            default=day_options,
+            format_func=lambda d: f"{d:%a %b} {d.day}",
+            key=f"follow_day_filter_{competition_choice}",
+        )
+        shown = filter_heats(heats, competition_choice, day_choice if day_options else None)
+        if day_options and not day_choice:
+            shown = shown.iloc[0:0]
+        view = st.radio("Show heats as", ["Cards", "Table"], horizontal=True, key="follow_heat_view")
+
+        if shown.empty:
+            st.write("No heats for that selection.")
+        else:
+            dated = shown[shown["Date"].notna()]
+            # Open the day that is on now / next, not the first (often already
+            # danced) day -- with hundreds of heats a closed list is easier to
+            # scan on a phone than a 190-card scroll.
+            still_to_come = dated[
+                (dated["Danced"] == "No")
+                & (dated["_scheduled_time"] >= now - dt.timedelta(minutes=_ON_FLOOR_GRACE_MINUTES))
+            ]
+            if not still_to_come.empty:
+                first_open_date = still_to_come["Date"].iloc[0]
+            else:
+                first_open_date = dated["Date"].iloc[0] if not dated.empty else None
+            show_cols = ["Time", "Heat #", "Followed", "Couple", "Event", "Round", "Floor", "Danced", "View event"]
+            for (competition_name, date), group in dated.groupby(["Competition", "Date"], sort=False):
+                title = f"{group['Day'].iloc[0]}, {date:%b} {date.day} -- {competition_name} ({len(group)} heats)"
+                with st.expander(title, expanded=(date == first_open_date)):
+                    if view == "Table":
+                        st.dataframe(
+                            group[show_cols],
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config=_HEAT_EVENT_LINK_COLUMN_CONFIG,
+                        )
+                    else:
+                        for heat_row in group.to_dict("records"):
+                            st.markdown(heat_card_markdown(heat_row))
+                            st.divider()
+            undated = shown[shown["Date"].isna()]
+            if not undated.empty:
+                with st.expander(f"Time not yet published ({len(undated)} heats)"):
+                    st.dataframe(
+                        undated[show_cols],
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config=_HEAT_EVENT_LINK_COLUMN_CONFIG,
+                    )
+
+            # ---- one heat up close ----
+            with st.expander("Look closer at a heat: who's on the floor, and scouting"):
+                _heat_details(session, db_identity, shown, now)
+
+        # ---- reminders ----
+        upcoming_count = int(((shown["Danced"] == "No") & shown["_scheduled_time"].notna()).sum())
         if upcoming_count:
-            st.write("**Get reminders**")
+            st.subheader("Get reminders")
+            st.write(
+                f"For the heats chosen above: **{competition_choice}**, "
+                f"{len(day_choice) if day_options else 0} day{'s' if len(day_choice) != 1 else ''}."
+            )
             minutes = st.selectbox(
                 "Remind me this many minutes before each heat",
                 _REMINDER_CHOICES,
                 index=_REMINDER_CHOICES.index(20),
                 key="follow_reminder_minutes",
             )
+            check_results = st.checkbox(
+                "Also remind me to check results and scoresheets the morning after",
+                value=True,
+                key="follow_results_reminder",
+            )
             st.download_button(
                 f"Download calendar reminders ({upcoming_count} heats)",
-                heats_to_ics(heats, minutes),
+                heats_to_ics(shown, minutes, check_results=check_results, app_url=share_url),
                 file_name="dancesport-heats.ics",
                 mime="text/calendar",
                 key="follow_ics_download",
@@ -3329,6 +4353,8 @@ def following_page(session) -> None:
                 "without a signal at the venue. Schedules can shift, so download the file again the morning "
                 "of the competition; importing it again updates the same entries instead of duplicating them."
             )
+        elif not shown.empty:
+            st.caption("No upcoming heats with a published time in this selection, so there is nothing to remind.")
 
     st.subheader("Recent results (last 30 days)")
     results = recent_results_for_followed_people(session, ids)
@@ -3341,6 +4367,22 @@ def following_page(session) -> None:
             hide_index=True,
             column_config=_VIEW_LINK_COLUMN_CONFIG,
         )
+
+    # ---- progress and recaps for one couple ----
+    st.subheader("Progress and competition recaps")
+    couples: dict[int, Partnership] = {}
+    for pid in ids:
+        for partnership in partnerships_for_person(session, db_identity, pid):
+            couples[partnership.id] = partnership
+    if not couples:
+        st.write("No couples on file for these dancers yet.")
+        return
+    ordered = sorted(couples.values(), key=lambda p: p.last_seen or dt.date.min, reverse=True)
+    labels = {p.id: partner_label(session, p) for p in ordered}
+    couple_choice = st.selectbox(
+        "Couple", list(labels), format_func=lambda pid: labels[pid], key="follow_couple_choice"
+    )
+    _couple_progress_and_recap(session, couples[couple_choice], key_prefix="follow")
 
 
 def main() -> None:
@@ -3374,12 +4416,13 @@ def main() -> None:
     # The follow list lives in the address too (see following_page), so
     # "New search" keeps it and the button only shows when something else
     # is in the address.
-    if any(key != _FOLLOW_PARAM for key in st.query_params):
+    kept_params = (_FOLLOW_PARAM, _SEEN_PARAM)
+    if any(key not in kept_params for key in st.query_params):
         if st.button("← New search"):
-            kept_follow = st.query_params.get(_FOLLOW_PARAM)
+            kept = {k: st.query_params.get(k) for k in kept_params if st.query_params.get(k)}
             st.query_params.clear()
-            if kept_follow:
-                st.query_params[_FOLLOW_PARAM] = kept_follow
+            for k, v in kept.items():
+                st.query_params[k] = v
             st.session_state.pop("search_mode_radio", None)
             st.rerun()
 
