@@ -7,6 +7,7 @@ import pandas as pd
 from app import (
     competition_recap,
     filter_heats,
+    add_venue_now,
     follow_share_url,
     head_to_head_records,
     heat_card_markdown,
@@ -22,6 +23,7 @@ from app import (
     result_history_for_partnership,
     scouting_report,
     trend_sentence,
+    venue_time_zone,
 )
 from dsr.db import get_session, init_db
 from dsr.models import CompEvent, Competition, Entry, Mark, Partnership, Person, Result, Round, ScheduledHeat
@@ -91,6 +93,29 @@ def test_next_up_falls_back_to_a_heat_with_no_time_and_labels_far_away_days():
     assert result.loc["Ann", "Starts"] == "Time not published yet"
     assert result.loc["Bob", "Starts"] == "Mon Nov 16, 2:05 PM"
     assert next_up_for_followed(pd.DataFrame(), NOW).empty
+
+
+def test_venue_time_zone_from_city_and_next_up_measures_on_the_venues_clock():
+    assert venue_time_zone("Chicago") == "America/Chicago"
+    assert venue_time_zone("Provo") == "America/Denver"
+    assert venue_time_zone("St. Louis") == "America/Chicago"
+    assert venue_time_zone("Phoenix") == "America/Phoenix"
+    assert venue_time_zone("Columbus") == "America/New_York"
+    assert venue_time_zone(None) == "America/New_York"
+
+    # It is 8:00 AM Pacific = 11:00 AM Eastern = 10:00 AM Central. A 10:30 AM heat is in 90 minutes in
+    # Chicago, but already over (30 minutes ago) in Columbus. The viewer's own clock must not matter.
+    now_utc = dt.datetime(2026, 11, 14, 16, 0, tzinfo=UTC)
+    chicago = _heat_row("Ann", 10, 30, competition="Chicago Ball")
+    chicago["_time_zone"] = "America/Chicago"
+    columbus = _heat_row("Bob", 10, 30, competition="Ohio Ball")
+    columbus["_time_zone"] = "America/New_York"
+    heats = add_venue_now(pd.DataFrame([chicago, columbus]), now_utc)
+    assert heats["_now_local"].tolist() == [pd.Timestamp("2026-11-14 10:00"), pd.Timestamp("2026-11-14 11:00")]
+    result = next_up_for_followed(heats, NOW).set_index("Dancer")
+    assert result.loc["Ann", "Starts"] == "in 30 min"
+    assert result.loc["Bob", "Starts"] == "No more heats on file"  # 30 min ago and not ticked: stale
+    assert add_venue_now(pd.DataFrame(), now_utc).empty
 
 
 # ---- 4. sharing ----

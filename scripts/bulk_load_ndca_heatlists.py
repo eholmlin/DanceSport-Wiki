@@ -149,6 +149,26 @@ def main() -> None:
         loaded += 1
         print(f"[{i+1}/{len(competitions)}] {name} ({comp_date}) -> {n} scheduled_heat rows loaded")
 
+    # Events that publish their heat lists on Comp Manager instead of NDCA
+    # Premier (e.g. Ohio Star Ball) -- see dsr.load.comp_mngr_heatlist. Same
+    # daily run, so one scheduled job covers both; a failure here is logged
+    # but must not fail the NDCA run's own success marker.
+    try:
+        from dsr.load.comp_mngr_heatlist import events_to_refresh  # noqa: F401  (import check)
+        import importlib.util
+        import pathlib
+
+        spec = importlib.util.spec_from_file_location(
+            "load_comp_mngr_heatlists", pathlib.Path(__file__).with_name("load_comp_mngr_heatlists.py")
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        print()
+        module.run(session, fetcher)
+    except Exception as exc:  # noqa: BLE001
+        session.rollback()
+        print(f"  (ERROR) Comp Manager heat lists skipped -- {type(exc).__name__}: {exc}")
+
     fetcher.close()
     print(f"\nDone. Loaded {loaded}/{len(competitions)} competitions. {len(failures)} failed.")
     for cyi, name, msg in failures:

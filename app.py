@@ -3072,6 +3072,42 @@ def follow_button(person_id: int, key: str) -> None:
         st.button("☆ Follow this dancer", key=key, on_click=_follow, args=(person_id,))
 
 
+_PACIFIC_CITIES = {
+    "los angeles", "burlingame", "irvine", "san jose", "las vegas", "henderson", "palm desert", "san francisco",
+    "san diego", "garden grove", "costa mesa", "palo alto", "fremont", "torrance", "santa barbara", "seattle",
+    "renton", "portland",
+}
+_MOUNTAIN_CITIES = {
+    "provo", "lehi", "orem", "denver", "greenwood village", "aurora", "colorado springs",
+}
+_CENTRAL_CITIES = {
+    "nashville", "chicago", "minneapolis", "houston", "austin", "irving", "dallas", "new orleans", "st louis",
+    "san antonio", "oak brook", "kansas city", "naperville", "lombard", "milwaukee", "memphis", "universal city",
+    "pflugerville", "michigan city",
+}
+_ARIZONA_CITIES = {"phoenix", "scottsdale", "tucson"}
+
+
+def venue_time_zone(city: str | None) -> str:
+    """Best-effort IANA time zone for a competition from its city (the
+    database records a city but no state or zone). Heat times are the
+    venue's local clock, so "starts in 20 minutes" must be measured on that
+    clock, not the viewer's. Cities not listed are taken as Eastern, where
+    most of the unlisted ones are; add a city here when one is wrong."""
+    key = (city or "").strip().lower().replace(".", "")
+    if key in _PACIFIC_CITIES:
+        return "America/Los_Angeles"
+    if key in _MOUNTAIN_CITIES:
+        return "America/Denver"
+    if key in _CENTRAL_CITIES:
+        return "America/Chicago"
+    if key in _ARIZONA_CITIES:
+        return "America/Phoenix"
+    if key == "honolulu":
+        return "Pacific/Honolulu"
+    return "America/New_York"
+
+
 def heats_for_followed_people(session, person_ids: list[int]) -> pd.DataFrame:
     """Every scheduled heat for any partnership a followed person is part
     of (as leader, follower or Pro-Am student), soonest first, across
@@ -3082,6 +3118,7 @@ def heats_for_followed_people(session, person_ids: list[int]) -> pd.DataFrame:
         "Date", "Day", "Time", "Competition", "Followed", "Couple", "Event", "Round",
         "Heat #", "Floor", "Danced", "View event", "_scheduled_time", "_uid",
         "_competition_id", "_comp_end", "_source", "_source_event_id", "_partnership_id", "_followed_names",
+        "_time_zone",
     ]
     if not person_ids:
         return pd.DataFrame(columns=columns)
@@ -3149,6 +3186,7 @@ def heats_for_followed_people(session, person_ids: list[int]) -> pd.DataFrame:
                 "_source_event_id": heat.source_event_id,
                 "_partnership_id": partnership.id,
                 "_followed_names": mine,
+                "_time_zone": venue_time_zone(competition.city),
             }
         )
     df = pd.DataFrame(out, columns=columns)
@@ -3373,6 +3411,32 @@ def _venue_now() -> dt.datetime:
     return dt.datetime.now(zone).replace(tzinfo=None)
 
 
+def _utc_now() -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc)
+
+
+def add_venue_now(heats: pd.DataFrame, now_utc: dt.datetime) -> pd.DataFrame:
+    """Adds "_now_local": the current time on each heat's own venue clock
+    (see venue_time_zone), the thing a heat's floating local start time has
+    to be compared against -- not the viewer's clock, which is in a
+    different zone for anyone following an event from home."""
+    out = heats.copy()
+    cache: dict[str, dt.datetime] = {}
+
+    def local_now(zone_name) -> dt.datetime:
+        name = zone_name if isinstance(zone_name, str) and zone_name else "America/New_York"
+        if name not in cache:
+            try:
+                cache[name] = now_utc.astimezone(ZoneInfo(name)).replace(tzinfo=None)
+            except Exception:
+                cache[name] = now_utc.astimezone(ZoneInfo("America/New_York")).replace(tzinfo=None)
+        return cache[name]
+
+    zones = out["_time_zone"] if "_time_zone" in out.columns else pd.Series([None] * len(out), index=out.index)
+    out["_now_local"] = pd.to_datetime([local_now(z) for z in zones]) if len(out) else pd.to_datetime([])
+    return out
+
+
 def _py_datetime(value) -> dt.datetime | None:
     """A plain datetime from a datetime/Timestamp, or None for blanks/NaT."""
     if value is None or value is pd.NaT:
@@ -3408,6 +3472,17 @@ def filter_heats(heats: pd.DataFrame, competition: str | None = None, days=None)
 # ---- 3. what's coming up next ----
 
 
+def next_up_zone_names(heats: pd.DataFrame) -> list[str]:
+    """Short names ("Central") for the venue time zones among these heats."""
+    labels = {
+        "America/New_York": "Eastern", "America/Chicago": "Central", "America/Denver": "Mountain",
+        "America/Phoenix": "Arizona", "America/Los_Angeles": "Pacific", "Pacific/Honolulu": "Hawaii",
+    }
+    if heats.empty or "_time_zone" not in heats.columns:
+        return []
+    return [labels.get(z, z) for z in heats["_time_zone"].dropna().unique()]
+
+
 def _starts_in_label(start: dt.datetime, now: dt.datetime) -> str:
     minutes = int((start - now).total_seconds() // 60)
     if minutes < 1:
@@ -3430,10 +3505,12 @@ def next_up_for_followed(heats: pd.DataFrame, now: dt.datetime) -> pd.DataFrame:
     columns = ["Dancer", "Starts", "Time", "Day", "Couple", "Event", "Round", "Heat #", "Floor", "Competition"]
     if heats.empty:
         return pd.DataFrame(columns=columns)
-    cutoff = now - dt.timedelta(minutes=_ON_FLOOR_GRACE_MINUTES)
     best: dict[str, tuple] = {}
     everyone: list[str] = []
     for row in heats.to_dict("records"):
+        # each heat is judged on its own venue's clock when we know it
+        row_now = _py_datetime(row.get("_now_local")) or now
+        cutoff = row_now - dt.timedelta(minutes=_ON_FLOOR_GRACE_MINUTES)
         names = list(row.get("_followed_names") or [])
         if not names and row.get("Followed"):
             names = [row["Followed"]]
@@ -3451,7 +3528,7 @@ def next_up_for_followed(heats: pd.DataFrame, now: dt.datetime) -> pd.DataFrame:
             continue
         for name in names:
             if name not in best or key < best[name][0]:
-                best[name] = (key, start, row)
+                best[name] = (key, start, row, row_now)
     out = []
     for name in everyone:
         if name not in best:
@@ -3459,11 +3536,11 @@ def next_up_for_followed(heats: pd.DataFrame, now: dt.datetime) -> pd.DataFrame:
                 {c: "" for c in columns} | {"Dancer": name, "Starts": "No more heats on file", "_sort": (2, dt.datetime.max)}
             )
             continue
-        key, start, row = best[name]
+        key, start, row, row_now = best[name]
         out.append(
             {
                 "Dancer": name,
-                "Starts": _starts_in_label(start, now) if start is not None else "Time not published yet",
+                "Starts": _starts_in_label(start, row_now) if start is not None else "Time not published yet",
                 "Time": _clock(start) if start is not None else "TBD",
                 "Day": f"{start:%A}" if start is not None else "",
                 "Couple": row["Couple"],
@@ -4102,11 +4179,11 @@ def _heat_details(session, db_identity: str, heats: pd.DataFrame, now: dt.dateti
     for i, row in enumerate(records):
         label = heat_choice_label(row)
         labels.append(label if label not in labels else f"{label} (#{i + 1})")
-    cutoff = now - dt.timedelta(minutes=_ON_FLOOR_GRACE_MINUTES)
     default = 0
     for i, row in enumerate(records):
         start = _py_datetime(row["_scheduled_time"])
-        if row["Danced"] == "No" and start is not None and start >= cutoff:
+        row_now = _py_datetime(row.get("_now_local")) or now
+        if row["Danced"] == "No" and start is not None and start >= row_now - dt.timedelta(minutes=_ON_FLOOR_GRACE_MINUTES):
             default = i
             break
     choice = st.selectbox("Pick a heat", range(len(labels)), index=default, format_func=labels.__getitem__, key="follow_heat_choice")
@@ -4228,7 +4305,8 @@ def following_page(session) -> None:
     )
 
     heats = heats_for_followed_people(session, ids)
-    now = _venue_now()
+    now = _venue_now()  # only a fallback; each heat is judged on its own venue's clock
+    heats = add_venue_now(heats, _utc_now())
 
     # ---- next up ----
     st.subheader("Coming up next")
@@ -4252,7 +4330,12 @@ def following_page(session) -> None:
             else:
                 st.markdown(f"**{_md(card['Dancer'])}** -- {_md(card['Starts'])}")
         st.button("↻ Refresh", key="follow_refresh")
-        st.caption(f"Times are the venue's local time. It is {_clock(now)} on your device's clock.")
+        zone_names = sorted({z for z in next_up_zone_names(heats)})
+        st.caption(
+            "Times are each venue's local time"
+            + (f" ({', '.join(zone_names)})" if zone_names else "")
+            + ", wherever you are."
+        )
 
         # ---- the heat list, with competition/day pickers ----
         st.subheader("All heats")
@@ -4286,7 +4369,7 @@ def following_page(session) -> None:
             # scan on a phone than a 190-card scroll.
             still_to_come = dated[
                 (dated["Danced"] == "No")
-                & (dated["_scheduled_time"] >= now - dt.timedelta(minutes=_ON_FLOOR_GRACE_MINUTES))
+                & (dated["_scheduled_time"] >= dated["_now_local"] - dt.timedelta(minutes=_ON_FLOOR_GRACE_MINUTES))
             ]
             if not still_to_come.empty:
                 first_open_date = still_to_come["Date"].iloc[0]

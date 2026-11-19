@@ -16,16 +16,30 @@ from dsr.resolve.entities import resolve_partnership, resolve_partnership_either
 
 
 def load_scheduled_heat(
-    session: Session, source: str, competition: Competition, staging: StagingScheduledHeat
+    session: Session,
+    source: str,
+    competition: Competition,
+    staging: StagingScheduledHeat,
+    *,
+    resolve_source: str | None = None,
 ) -> ScheduledHeat:
     """Upsert one StagingScheduledHeat by its natural key (source,
     source_event_id, round_name, partnership_id) -- re-loading the same
     heat list is idempotent, and updates the row's fields (a schedule can
-    shift between refreshes) plus updated_at rather than skipping."""
-    partner_1 = resolve_person(session, source=source, ref=staging.partner_1, country=None)
+    shift between refreshes) plus updated_at rather than skipping.
+
+    `resolve_source` is the alias namespace names are matched in, when it
+    differs from the heat's own `source` -- Comp Manager heat lists for
+    NDCA-sanctioned events carry NDCA-style "Firstname Lastname" names, so
+    they are matched against the NDCA aliases already on file (an exact hit)
+    instead of falling into fuzzy matching, which does not auto-match and
+    would create a second copy of every dancer already known."""
+    name_source = resolve_source or source
+    partner_1 = resolve_person(session, source=name_source, ref=staging.partner_1, country=None)
     if staging.partner_2 is not None:
         partner_2 = resolve_person(
-            session, source=source, ref=staging.partner_2, country=None, partner_person_ids=frozenset({partner_1.id})
+            session, source=name_source, ref=staging.partner_2, country=None,
+            partner_person_ids=frozenset({partner_1.id}),
         )
         partnership = resolve_partnership_either_order(session, partner_1, partner_2, kind="amateur")
     else:
