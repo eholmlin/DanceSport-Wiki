@@ -53,10 +53,16 @@ def load_event(
     competition: Competition,
     event: CompMngrEventData,
     judge_letter_to_person_id: dict[str, int],
+    *,
+    resolve_source: str = SOURCE,
 ) -> CompEvent:
     """Load one round's worth of a parsed CompMngrEventData: comp_event
-    (upserted by raw_title) + this round's entries/results + marks."""
+    (upserted by raw_title) + this round's entries/results + marks.
+
+    `resolve_source` is the alias namespace people are matched in; see
+    dsr.load.heatlist.load_scheduled_heat for why a live NDCA event passes
+    "ndca_premier" (with names already flipped to "First Last")."""
     comp_event = load_comp_event(session, competition, event)
-    entry_by_competitor_no = load_ranking_page(session, SOURCE, competition, comp_event, event.ranking)
+    entry_by_competitor_no = load_ranking_page(session, resolve_source, competition, comp_event, event.ranking)
     load_marks(session, comp_event, entry_by_competitor_no, judge_letter_to_person_id, event.marks)
     return comp_event

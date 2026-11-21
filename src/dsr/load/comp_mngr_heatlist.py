@@ -59,6 +59,13 @@ def events_to_refresh(today: dt.date, events=HEATLIST_EVENTS) -> list[CompMngrHe
     return [e for e in events if e.end_date >= today and e.start_date <= today + dt.timedelta(days=30)]
 
 
+def events_with_results_due(today: dt.date, events=HEATLIST_EVENTS, *, days_after: int = 7) -> list[CompMngrHeatlistEvent]:
+    """Events that have started and finished no more than `days_after` days
+    ago -- when results are being posted (see scripts/bulk_load_comp_mngr.py,
+    refresh_live_events)."""
+    return [e for e in events if e.start_date <= today <= e.end_date + dt.timedelta(days=days_after)]
+
+
 def load_comp_mngr_heatlist(
     session: Session, fetcher: PoliteFetcher, event: CompMngrHeatlistEvent, *, now_utc: dt.datetime | None = None
 ) -> int:

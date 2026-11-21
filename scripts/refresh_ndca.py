@@ -91,6 +91,23 @@ def main() -> None:
             continue
         print(f"  -> {n} comp_events loaded")
 
+    # Live Comp Manager events (e.g. Ohio Star Ball) post results there rather
+    # than on NDCA Premier; a failure here must not fail the NDCA refresh.
+    try:
+        import importlib.util
+        import pathlib
+
+        spec = importlib.util.spec_from_file_location(
+            "bulk_load_comp_mngr", pathlib.Path(__file__).with_name("bulk_load_comp_mngr.py")
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        print()
+        module.refresh_live_events(session, fetcher)
+    except Exception as exc:  # noqa: BLE001
+        session.rollback()
+        print(f"  (ERROR) Comp Manager results skipped -- {type(exc).__name__}: {exc}")
+
     fetcher.close()
     print("\nDone.")
 

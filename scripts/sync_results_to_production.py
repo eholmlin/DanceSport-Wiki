@@ -1,6 +1,7 @@
 """Incremental sync of competition results from local SQLite to production
 Postgres, for competitions whose results changed since the last sync.
-Covers every source in SYNCED_SOURCES (NDCA Premier and Cre8tive Score).
+Covers every source in SYNCED_SOURCES (NDCA Premier, Cre8tive Score, and the
+live Comp Manager events).
 
 Unlike migrate_sqlite_to_postgres.py, this never TRUNCATEs anything: every
 row is upserted (inserted if new, updated in place if it already exists,
@@ -26,7 +27,7 @@ import argparse
 import datetime as dt
 import os
 
-from sqlalchemy import bindparam, create_engine, delete, inspect, select, text
+from sqlalchemy import bindparam, or_, create_engine, delete, inspect, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import sessionmaker
 
@@ -50,7 +51,7 @@ CHUNK_SIZE = 2000
 # Competition.source_updated_at to something that changes when its results
 # do (NDCA: Publish_Dates.Results; Cre8tive: resultsPublishedAt) -- that
 # value is the change detector.
-SYNCED_SOURCES = ("ndca_premier", "cre8tive")
+SYNCED_SOURCES = ("ndca_premier", "cre8tive", "comp_mngr")
 
 # SQLite rejects a query with too many "?" placeholders (SQLITE_MAX_VARIABLE_NUMBER,
 # as low as 999 on some builds), so any WHERE ... IN (...) over an id list that can
@@ -149,7 +150,15 @@ def main() -> None:
 
     local_comps = {
         c.id: c
-        for c in sqlite.execute(select(Competition).where(Competition.source.in_(SYNCED_SOURCES))).scalars().all()
+        for c in sqlite.execute(
+            select(Competition).where(
+                Competition.source.in_(SYNCED_SOURCES),
+                # Comp Manager has no results-publish timestamp, except for the
+                # live events scripts/bulk_load_comp_mngr.py stamps one on; the
+                # older (already-synced) ones have none, so they're skipped.
+                or_(Competition.source != "comp_mngr", Competition.source_updated_at.is_not(None)),
+            )
+        ).scalars().all()
     }
     with pg_engine.connect() as pg_conn:
         prod_updated_at = dict(

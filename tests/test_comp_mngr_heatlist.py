@@ -119,3 +119,35 @@ def test_load_comp_mngr_heatlist_creates_the_competition_and_is_idempotent(tmp_p
     assert load_comp_mngr_heatlist(session, _FakeFetcher(), event, now_utc=now) == 4
     assert session.query(ScheduledHeat).count() == 4  # reloading updates, never duplicates
     assert session.query(Competition).count() == 1
+
+
+def test_events_with_results_due_covers_the_event_and_the_week_after():
+    import datetime as dt
+
+    from dsr.load.comp_mngr_heatlist import HEATLIST_EVENTS, events_with_results_due
+
+    event = HEATLIST_EVENTS[0]
+    assert events_with_results_due(event.start_date - dt.timedelta(days=1)) == []
+    assert events_with_results_due(event.start_date) == [event]
+    assert events_with_results_due(event.end_date + dt.timedelta(days=7)) == [event]
+    assert events_with_results_due(event.end_date + dt.timedelta(days=8)) == []
+
+
+def test_live_event_keeps_heat_list_dates_and_stamps_the_results_time():
+    import datetime as dt
+    import sys
+    from types import SimpleNamespace
+
+    sys.path.insert(0, "scripts")
+    import bulk_load_comp_mngr as loader
+    from dsr.load.comp_mngr_heatlist import HEATLIST_EVENTS
+    from dsr.parse.staging import StagingCompetition
+
+    staging = StagingCompetition(
+        source="comp_mngr", source_code="x", name="guess", start_date=dt.date(2026, 11, 15),
+        end_date=dt.date(2026, 11, 20), city=None, country="USA", sanctioning_body="NDCA", url="u",
+    )
+    resp = SimpleNamespace(headers={"last-modified": "Fri, 20 Nov 2026 21:52:34 GMT"})
+    loader._apply_live_event(staging, HEATLIST_EVENTS[0], resp)
+    assert (staging.start_date, staging.end_date, staging.city) == (dt.date(2026, 11, 17), dt.date(2026, 11, 22), "Columbus")
+    assert staging.source_updated_at == dt.datetime(2026, 11, 20, 21, 52, 34)
