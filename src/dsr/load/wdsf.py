@@ -266,6 +266,8 @@ def _load_entry(session: Session, competition: Competition, partnership_id: int,
 def _load_result(session: Session, comp_event: CompEvent, entry: Entry, staging_result) -> Result:
     existing = session.get(Result, {"comp_event_id": comp_event.id, "entry_id": entry.id})
     if existing is not None:
+        if existing.made_final and not staging_result.made_final:
+            return existing  # an earlier round's "didn't advance" must not undo a placement
         existing.placement_low = staging_result.placement_low
         existing.placement_high = staging_result.placement_high
         existing.made_final = staging_result.made_final

@@ -362,6 +362,7 @@ def _parse_heat_block(block: list[str], directory: dict[str, StagingPersonRef]) 
     marks: list[StagingMark] = []
     field_size = len(rows)
     recalled_count = 0
+    eliminated: list[StagingResult] = []
 
     for row in rows:
         entry_match = _ENTRY_ROW.match(row[0].strip())
@@ -391,6 +392,17 @@ def _parse_heat_block(block: list[str], directory: dict[str, StagingPersonRef]) 
             recalled = row[-1].strip() == "Recall"
             if recalled:
                 recalled_count += 1
+            else:
+                # Out in this round: no placement exists (the later rounds
+                # never include them), but the couple did compete, so give
+                # them a made_final=False result like NDCA's own pages do --
+                # without it the app lists only the couples who reached the
+                # final. Dropped below if the round hasn't been tallied yet.
+                eliminated.append(
+                    StagingResult(
+                        competitor_no=bib, placement_low=None, placement_high=None, made_final=False, field_size=field_size
+                    )
+                )
             for judge_no, cell in zip(judge_numbers, judge_cells):
                 marks.append(
                     StagingMark(
@@ -428,6 +440,9 @@ def _parse_heat_block(block: list[str], directory: dict[str, StagingPersonRef]) 
                         placement=mark_placement,
                     )
                 )
+
+    if recalled_count:  # a round with nobody recalled yet hasn't been tallied: eliminate no one
+        results.extend(eliminated)
 
     staging_round = StagingRound(
         round_type=round_type,
@@ -661,4 +676,15 @@ def parse_scoresheets_dat(
             skipped += 1
             continue
         events.append(parsed)
+
+    # Every result of an event reports the event's whole field (its largest
+    # round), as NDCA's do -- a couple out in the semi-final is "of 11", not
+    # "of the 6 who got that far".
+    widest: dict[str, int] = {}
+    for event in events:
+        for rnd in event.ranking.rounds:
+            widest[event.raw_title] = max(widest.get(event.raw_title, 0), rnd.entries_in or 0)
+    for event in events:
+        for result in event.ranking.results:
+            result.field_size = max(result.field_size, widest.get(event.raw_title, 0))
     return events, skipped

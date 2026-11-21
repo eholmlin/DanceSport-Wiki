@@ -310,3 +310,46 @@ def test_parse_scoresheets_dat_quarter_final_round_type_seen_in_wild():
     events, _skipped = parse_scoresheets_dat(load("wisconsin2023_scoresheetsbyperson.dat"))
     round_types = {e.ranking.rounds[0].round_type for e in events}
     assert round_types <= {"Quarter-final", "Semi-final", "final"}
+
+
+def test_couples_out_in_a_recall_round_get_a_not_in_final_result():
+    from dsr.parse.comp_mngr import parse_scoresheets_dat
+
+    dat = (
+        "<1,2,3,4\n"
+        "Heat 555: L-A1 Advance Bolero - Semi-final\n"
+        "|No.|01|12|Total|Recall|\n"
+        "|130 Meuer/Grygorchuk|R|R|2|Recall|\n"
+        "|168 Costello/Shipilov|R|R|2|Recall|\n"
+        "|264 Satava/Reyzin|R||1||\n"
+        "|337 Russ/Gardner||||||\n"
+        ">\n"
+        "<1,2,3,4\n"
+        "Heat 555: L-A1 Advance Bolero\n"
+        "|No.|01|12||1|Result|\n"
+        "|130 Meuer/Grygorchuk|2|1||2|2|\n"
+        "|168 Costello/Shipilov|1|2||1|1|\n"
+        ">\n"
+    ).encode()
+    events, _ = parse_scoresheets_dat(dat)
+    results = {r.competitor_no: r for e in events for r in e.ranking.results}
+    assert results["264"].made_final is False and results["264"].placement_low is None
+    assert results["337"].made_final is False
+    assert results["130"].made_final is True and results["130"].placement_low == 2
+    assert "168" in results and results["168"].placement_low == 1
+    assert {r.field_size for r in results.values()} == {4}  # the event's whole field
+
+
+def test_untallied_recall_round_eliminates_nobody():
+    from dsr.parse.comp_mngr import parse_scoresheets_dat
+
+    dat = (
+        "<1,2\n"
+        "Heat 9: L-A1 Advance Rumba - Semi-final\n"
+        "|No.|01|12|Total|Recall|\n"
+        "|130 Meuer/Grygorchuk|R|R|2||\n"
+        "|264 Satava/Reyzin|R||1||\n"
+        ">\n"
+    ).encode()
+    events, _ = parse_scoresheets_dat(dat)
+    assert [r for e in events for r in e.ranking.results] == []
