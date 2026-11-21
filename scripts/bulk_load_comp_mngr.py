@@ -103,6 +103,27 @@ def _fetch(fetcher: PoliteFetcher, session, url: str) -> bytes | None:
     return resp.content
 
 
+def wipe_results(session, competition_id: int) -> None:
+    """Deletes a competition's results-side rows (marks, results, rounds,
+    entries, events) ahead of re-loading it. A live event is re-parsed from
+    scratch every day and the parser improves as the data shows new shapes; a
+    plain re-load only adds/updates, so rows a better parse no longer
+    produces (e.g. marks once attached to the wrong partnership) would stay.
+    Its heat list (scheduled_heat) is separate and untouched."""
+    from sqlalchemy import delete, select
+
+    from dsr.models import CompEvent, Entry, Mark, MarkHesitation, Result, Round
+
+    event_ids = select(CompEvent.id).where(CompEvent.competition_id == competition_id)
+    round_ids = select(Round.id).where(Round.comp_event_id.in_(event_ids))
+    session.execute(delete(MarkHesitation).where(MarkHesitation.round_id.in_(round_ids)))
+    session.execute(delete(Mark).where(Mark.round_id.in_(round_ids)))
+    session.execute(delete(Result).where(Result.comp_event_id.in_(event_ids)))
+    session.execute(delete(Round).where(Round.comp_event_id.in_(event_ids)))
+    session.execute(delete(Entry).where(Entry.competition_id == competition_id))
+    session.execute(delete(CompEvent).where(CompEvent.competition_id == competition_id))
+
+
 def _apply_live_event(staging, event: CompMngrHeatlistEvent, dat_resp) -> None:
     """A live event is also loaded as a heat list (dsr.load.comp_mngr_heatlist),
     and that is where its real dates and city come from: this loader guesses
@@ -163,6 +184,8 @@ def load_one_competition(fetcher: PoliteFetcher, session, slug: str) -> tuple[in
     if live_event is not None:
         _apply_live_event(competition_staging, live_event, dat_resp)
     competition = load_competition(session, competition_staging)
+    if live_event is not None:
+        wipe_results(session, competition.id)
 
     judges = parse_judges(index)
     directory = parse_person_directory(index)

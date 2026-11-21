@@ -263,6 +263,26 @@ def main() -> None:
         )
         print(f"Upserted {n} competition rows (so future runs see these as already synced).")
 
+        # A live Comp Manager event is re-parsed from scratch locally (see
+        # scripts/bulk_load_comp_mngr.py, wipe_results), so what's in
+        # production for it is replaced rather than merged: an upsert alone
+        # would leave behind rows the corrected parse no longer produces.
+        live_ids = [cid for cid in changed_ids if local_comps[cid].source == "comp_mngr"]
+        if live_ids:
+            ce_t, rd_t = CompEvent.__table__, Round.__table__
+            event_ids = select(ce_t.c.id).where(ce_t.c.competition_id.in_(live_ids))
+            round_ids_q = select(rd_t.c.id).where(rd_t.c.comp_event_id.in_(event_ids))
+            if has_hesitation_table:
+                pg_conn.execute(
+                    delete(MarkHesitation.__table__).where(MarkHesitation.__table__.c.round_id.in_(round_ids_q))
+                )
+            pg_conn.execute(delete(Mark.__table__).where(Mark.__table__.c.round_id.in_(round_ids_q)))
+            pg_conn.execute(delete(Result.__table__).where(Result.__table__.c.comp_event_id.in_(event_ids)))
+            pg_conn.execute(delete(rd_t).where(rd_t.c.comp_event_id.in_(event_ids)))
+            pg_conn.execute(delete(Entry.__table__).where(Entry.__table__.c.competition_id.in_(live_ids)))
+            pg_conn.execute(delete(ce_t).where(ce_t.c.competition_id.in_(live_ids)))
+            print(f"Cleared the previous results of {len(live_ids)} live event(s) before replacing them.")
+
         n = insert_missing_only(pg_conn, Person, [row_to_dict(Person, p) for p in missing_people])
         print(f"Inserted {n} new person rows.")
         n = insert_missing_only(

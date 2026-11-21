@@ -394,3 +394,43 @@ def test_multi_dance_recall_rounds_are_loaded_with_dances_and_eliminations():
     assert [r.competitor_no for r in semi.ranking.results] == ["626"]
     assert semi.ranking.results[0].made_final is False
     assert semi.ranking.rounds[0].recalled_count == 2 and semi.ranking.rounds[0].entries_in == 3
+
+
+def test_same_surname_in_a_rounds_id_pool_is_settled_from_another_round():
+    from dsr.parse.comp_mngr import parse_scoresheets_dat
+    from dsr.parse.staging import StagingPersonRef
+
+    directory = {
+        "1": StagingPersonRef(name="Long, Mishe"),
+        "2": StagingPersonRef(name="Johnson, Matthew"),
+        "3": StagingPersonRef(name="Johnson, Capri"),
+    }
+    dat = (
+        # First Round: both Johnsons in the pool, Matthew listed first -> a wrong guess
+        "<1,2,3\n"
+        "=Heat 831: AC-YA 5-Dance (C/S) First Round\n"
+        "Cha Cha\n"
+        "|No.|01|02|Total|\n"
+        "|740 Long/Johnson|R|R|2|\n"
+        "|741 Smith/Jones|R||1|\n"
+        "Samba\n"
+        "|No.|01|02|Total|Accum|Recall|\n"
+        "|740 Long/Johnson|R|R|2|4|Recall|\n"
+        "|741 Smith/Jones|R||1|1||\n"
+        ">\n"
+        # Final: only Capri in the pool
+        "<1,3\n"
+        "=Heat 831: AC-YA 5-Dance (C/S)\n"
+        "Cha Cha\n"
+        "|No.|01|02||1|Result|\n"
+        "|740 Long/Johnson|1|1||1|1|\n"
+        "Final summary\n"
+        "|No.|Result|\n"
+        "|740 Long/Johnson|1|\n"
+        ">\n"
+    ).encode()
+    events, _ = parse_scoresheets_dat(dat, directory)
+    first = next(e for e in events if e.ranking.rounds[0].round_type == "Round 1")
+    assert first.ranking.rounds[0].round_order == 0
+    couple = next(e for e in first.ranking.entries if e.competitor_no == "740")
+    assert couple.partner_2.name == "Johnson, Capri"

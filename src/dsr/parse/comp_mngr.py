@@ -48,7 +48,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from dsr.parse.staging import (
     RankingPage,
@@ -72,7 +72,7 @@ _RECALL_ROUND_SUFFIXES = ("Quarter-final", "Semi-final")
 # "final has the highest round_order" is the one invariant callers rely
 # on) -- not every event has every round, and that's fine, since these
 # are never required to be contiguous.
-_ROUND_RANK = {"Quarter-final": 1, "Semi-final": 2, "final": 3}
+_ROUND_RANK = {"Round 1": 0, "Quarter-final": 1, "Semi-final": 2, "final": 3}
 
 
 class ParseError(ValueError):
@@ -85,6 +85,8 @@ class CompMngrEventData:
     ranking: RankingPage
     marks: list[StagingMark]
     heat_number: str | None = None  # multi-dance blocks only: ties a round to its event (see parse_scoresheets_dat)
+    # bibs whose partner names were a guess: two people in the block's id pool share a surname
+    ambiguous_bibs: set[str] = field(default_factory=set)
 
 
 def _decode(raw: bytes) -> str:
@@ -293,7 +295,11 @@ _BLOCK_ID_LIST = re.compile(r"^<([\d,]+)$")
 
 
 def _resolve_couple_names(
-    abbrev_names: list[str], candidate_ids: list[str], directory: dict[str, StagingPersonRef], claimed: set[str]
+    abbrev_names: list[str],
+    candidate_ids: list[str],
+    directory: dict[str, StagingPersonRef],
+    claimed: set[str],
+    ambiguous: list[bool] | None = None,
 ) -> list[str]:
     """The .dat file's own rows only carry last names (e.g. "Fantauzzi/
     D'Arpino"); full "Firstname Lastname" pairs have to be recovered by
@@ -309,19 +315,26 @@ def _resolve_couple_names(
     prevents the same id being matched twice within one row. Falls back
     to the bare abbreviated surname when no confident match is found,
     rather than failing the whole row.
+
+    When two unclaimed people in the pool share the surname the first is
+    taken, which can be the wrong one (real case: "740 Long/Johnson" with
+    both Capri and Matthew Johnson in a round's id pool). `ambiguous`, when
+    given, gets a True appended so the caller can have the row's names
+    settled from another round of the same event -- see
+    resolve_ambiguous_couples.
     """
     resolved = []
     for surname in abbrev_names:
-        match = next(
-            (
-                pid
-                for pid in candidate_ids
-                if pid not in claimed
-                and pid in directory
-                and directory[pid].name.split(",")[0].strip().lower() == surname.lower()
-            ),
-            None,
-        )
+        matches = [
+            pid
+            for pid in candidate_ids
+            if pid not in claimed
+            and pid in directory
+            and directory[pid].name.split(",")[0].strip().lower() == surname.lower()
+        ]
+        match = matches[0] if matches else None
+        if len(matches) > 1 and ambiguous is not None:
+            ambiguous.append(True)
         if match is not None:
             claimed.add(match)
             resolved.append(directory[match].name)
@@ -364,6 +377,7 @@ def _parse_heat_block(block: list[str], directory: dict[str, StagingPersonRef]) 
     field_size = len(rows)
     recalled_count = 0
     eliminated: list[StagingResult] = []
+    ambiguous_bibs: set[str] = set()
 
     for row in rows:
         entry_match = _ENTRY_ROW.match(row[0].strip())
@@ -382,7 +396,10 @@ def _parse_heat_block(block: list[str], directory: dict[str, StagingPersonRef]) 
         # a real bug this caught.
         abbrev_names = [n.strip() for n in names_part.split("/", 1) if n.strip()]
         claimed: set[str] = set()
-        name_parts = _resolve_couple_names(abbrev_names, candidate_ids, directory, claimed)
+        was_ambiguous: list[bool] = []
+        name_parts = _resolve_couple_names(abbrev_names, candidate_ids, directory, claimed, was_ambiguous)
+        if was_ambiguous:
+            ambiguous_bibs.add(bib)
         partner_1 = StagingPersonRef(name=name_parts[0])
         partner_2 = StagingPersonRef(name=name_parts[1]) if len(name_parts) > 1 else None
         entries.append(StagingEntry(competitor_no=bib, country=None, partner_1=partner_1, partner_2=partner_2))
@@ -452,7 +469,7 @@ def _parse_heat_block(block: list[str], directory: dict[str, StagingPersonRef]) 
         recalled_count=recalled_count if is_recall_round else None,
     )
     ranking = RankingPage(is_solo=False, rounds=[staging_round], entries=entries, results=results)
-    return CompMngrEventData(raw_title=raw_title, ranking=ranking, marks=marks)
+    return CompMngrEventData(raw_title=raw_title, ranking=ranking, marks=marks, ambiguous_bibs=ambiguous_bibs)
 
 
 def _parse_combined_event_block(block: list[str]) -> CompMngrEventData | None:
@@ -505,7 +522,7 @@ _RULE_SECTION = re.compile(r"^Rule \d+$")
 
 
 _MULTI_DANCE_RECALL_TITLE = re.compile(
-    r"^(?P<title>.*?)\s*(?:-\s*)?(?P<round>Quarter-final|Semi-final)\s*$"
+    r"^(?P<title>.*?)\s*(?:-\s*)?(?P<round>Quarter-final|Semi-final|First Round)\s*$"
 )
 _HEAT_NUMBER = re.compile(r"^=(?:Pro heat|Heat) (\S+?):")
 
@@ -530,6 +547,8 @@ def _parse_multi_dance_recall_block(block: list[str], directory: dict[str, Stagi
     if heat is None or title_match is None:
         return None
     raw_title, round_type = title_match.group("title").strip(), title_match.group("round")
+    if round_type == "First Round":
+        round_type = "Round 1"  # the label NDCA events use for the first of several rounds
 
     id_match = _BLOCK_ID_LIST.match(block[0])
     candidate_ids = id_match.group(1).split(",") if id_match else []
@@ -588,10 +607,14 @@ def _parse_multi_dance_recall_block(block: list[str], directory: dict[str, Stagi
 
     entries: list[StagingEntry] = []
     results: list[StagingResult] = []
+    ambiguous_bibs: set[str] = set()
     field_size = len(couples)
     for bib, names_part in couples.items():
         abbrev_names = [n.strip() for n in names_part.split("/", 1) if n.strip()]
-        name_parts = _resolve_couple_names(abbrev_names, candidate_ids, directory, set())
+        was_ambiguous: list[bool] = []
+        name_parts = _resolve_couple_names(abbrev_names, candidate_ids, directory, set(), was_ambiguous)
+        if was_ambiguous:
+            ambiguous_bibs.add(bib)
         entries.append(
             StagingEntry(
                 competitor_no=bib,
@@ -612,7 +635,9 @@ def _parse_multi_dance_recall_block(block: list[str], directory: dict[str, Stagi
         recalled_count=len(recalled_bibs),
     )
     ranking = RankingPage(is_solo=False, rounds=[staging_round], entries=entries, results=results)
-    return CompMngrEventData(raw_title=raw_title, ranking=ranking, marks=marks, heat_number=heat.group(1))
+    return CompMngrEventData(
+        raw_title=raw_title, ranking=ranking, marks=marks, heat_number=heat.group(1), ambiguous_bibs=ambiguous_bibs
+    )
 
 
 def _parse_multi_dance_final_block(block: list[str], directory: dict[str, StagingPersonRef]) -> CompMngrEventData | None:
@@ -713,6 +738,7 @@ def _parse_multi_dance_final_block(block: list[str], directory: dict[str, Stagin
     header, rows = _parse_table_rows(final_lines)
     entries: list[StagingEntry] = []
     results: list[StagingResult] = []
+    ambiguous_bibs: set[str] = set()
     field_size = len(rows)
 
     for row in rows:
@@ -724,7 +750,10 @@ def _parse_multi_dance_final_block(block: list[str], directory: dict[str, Stagin
         # name is a real source omission, not a name to keep.
         abbrev_names = [n.strip() for n in names_part.split("/", 1) if n.strip()]
         claimed: set[str] = set()
-        name_parts = _resolve_couple_names(abbrev_names, candidate_ids, directory, claimed)
+        was_ambiguous: list[bool] = []
+        name_parts = _resolve_couple_names(abbrev_names, candidate_ids, directory, claimed, was_ambiguous)
+        if was_ambiguous:
+            ambiguous_bibs.add(bib)
         partner_1 = StagingPersonRef(name=name_parts[0])
         partner_2 = StagingPersonRef(name=name_parts[1]) if len(name_parts) > 1 else None
         entries.append(StagingEntry(competitor_no=bib, country=None, partner_1=partner_1, partner_2=partner_2))
@@ -746,8 +775,37 @@ def _parse_multi_dance_final_block(block: list[str], directory: dict[str, Stagin
     ranking = RankingPage(is_solo=False, rounds=[staging_round], entries=entries, results=results)
     heat = _HEAT_NUMBER.match(header_line)
     return CompMngrEventData(
-        raw_title=raw_title, ranking=ranking, marks=marks, heat_number=heat.group(1) if heat else None
+        raw_title=raw_title,
+        ranking=ranking,
+        marks=marks,
+        heat_number=heat.group(1) if heat else None,
+        ambiguous_bibs=ambiguous_bibs,
     )
+
+
+def resolve_ambiguous_couples(events: list[CompMngrEventData]) -> None:
+    """A round whose id pool holds two people with the same surname (e.g.
+    Capri and Matthew Johnson) may pick the wrong one for a couple
+    abbreviated "Long/Johnson" -- which splits the couple's quarter/semi-final
+    marks onto a different partnership than their final (real case: Mishe Long
+    & Capri Johnson). The same bib in another round of the same event, where
+    the pool had no such clash, is trusted instead. Events are matched by
+    heat number for multi-dance blocks, else by title."""
+    unambiguous: dict[tuple, dict[str, StagingEntry]] = {}
+    for event in events:
+        key = (event.heat_number,) if event.heat_number else (event.raw_title,)
+        for entry in event.ranking.entries:
+            if entry.competitor_no not in event.ambiguous_bibs:
+                unambiguous.setdefault(key, {}).setdefault(entry.competitor_no, entry)
+    for event in events:
+        key = (event.heat_number,) if event.heat_number else (event.raw_title,)
+        for entry in event.ranking.entries:
+            trusted = unambiguous.get(key, {}).get(entry.competitor_no)
+            if entry.competitor_no in event.ambiguous_bibs and trusted is not None:
+                entry.partner_1 = StagingPersonRef(name=trusted.partner_1.name)
+                entry.partner_2 = (
+                    StagingPersonRef(name=trusted.partner_2.name) if trusted.partner_2 is not None else None
+                )
 
 
 def parse_scoresheets_dat(
@@ -792,6 +850,8 @@ def parse_scoresheets_dat(
             skipped += 1
             continue
         events.append(parsed)
+
+    resolve_ambiguous_couples(events)
 
     # A multi-dance championship's rounds are titled by the same heat number,
     # but the organizer's title is not always spelled the same in every round
