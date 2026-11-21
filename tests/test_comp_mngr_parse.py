@@ -272,22 +272,25 @@ def test_parse_scoresheets_dat_multi_dance_final_block_strips_countback_suffix_a
     assert {m.dance for m in event.marks} == {"Hustle", "West Coast Swing"}
 
 
-def test_parse_scoresheets_dat_multi_dance_recall_round_stays_unhandled():
+def test_parse_scoresheets_dat_multi_dance_recall_rounds_are_loaded():
     # Real case: the same "=Heat"/"=Pro heat" block prefix is also used
     # for a genuine multi-dance *recall* round (per-judge "R" marks, no
-    # skated placement), titled with a " - Quarter-final"/" - Semi-final"
-    # suffix same as a regular heat block -- confirmed on real Wisconsin
-    # State 2023 data, which has all three rounds of this exact division
-    # (Quarter-final, Semi-final, and the true multi-dance final). Only
-    # the clean-titled final (no round suffix) should come through --
-    # the two round-suffixed recall blocks must stay unhandled (not
-    # misread their "R" marks as skated placements) rather than being
-    # silently guessed at.
+    # skated placement), titled with a "Quarter-final"/"Semi-final" suffix
+    # -- confirmed on real Wisconsin State 2023 data, which has all three
+    # rounds of this exact division. They used to be skipped (so a couple
+    # knocked out earlier left no trace); now each comes through as its own
+    # round, with a not-in-final result for every couple that wasn't
+    # recalled, and their "R" marks are never misread as placements.
     events, skipped = parse_scoresheets_dat(load("wisconsin2023_scoresheetsbyperson.dat"))
-    assert skipped > 0
     matches = [e for e in events if e.raw_title == "L-C Pro/Am Closed Silver Smooth Scholarship (W/T/FT)"]
-    assert len(matches) == 1
-    assert matches[0].ranking.rounds[0].round_type == "final"
+    rounds = {e.ranking.rounds[0].round_type: e for e in matches}
+    assert set(rounds) == {"Quarter-final", "Semi-final", "final"}
+    quarter = rounds["Quarter-final"]
+    assert (quarter.ranking.rounds[0].entries_in, quarter.ranking.rounds[0].recalled_count) == (27, 11)
+    assert len([r for r in quarter.ranking.results if not r.made_final]) == 16
+    assert all(m.placement is None for m in quarter.marks)
+    assert {m.dance for m in quarter.marks} == {"Waltz", "Tango", "Foxtrot"}
+    assert len(rounds["final"].ranking.results) == 7
 
 
 def test_parse_scoresheets_dat_skips_unhandled_shapes_without_failing():
@@ -353,3 +356,41 @@ def test_untallied_recall_round_eliminates_nobody():
     ).encode()
     events, _ = parse_scoresheets_dat(dat)
     assert [r for e in events for r in e.ranking.results] == []
+
+
+def test_multi_dance_recall_rounds_are_loaded_with_dances_and_eliminations():
+    from dsr.parse.comp_mngr import parse_scoresheets_dat
+
+    dat = (
+        "<1,2,3\n"
+        "=Heat 827: AC-Y Amateur 5-Dance Champ (C/S) Semi-final\n"
+        "Cha Cha\n"
+        "|No.|06|16|Total|\n"
+        "|517 Boiarchuk/Estrina|R|R|2|\n"
+        "|626 Groysman/Penatzer||R|1|\n"
+        "|643 Moroz/Chubay|R||1|\n"
+        "Samba\n"
+        "|No.|06|16|Total|Accum|Recall|\n"
+        "|517 Boiarchuk/Estrina|R|R|2|4|Recall|\n"
+        "|626 Groysman/Penatzer|R||1|2||\n"
+        "|643 Moroz/Chubay|R|R|2|3|Recall|\n"
+        ">\n"
+        "<1,2,3\n"
+        "=Heat 827: AC- Amateur 5-Dance Champ (C/S)\n"
+        "Cha Cha\n"
+        "|No.|06|16||1|Result|\n"
+        "|517 Boiarchuk/Estrina|1|2||1|1|\n"
+        "|643 Moroz/Chubay|2|1||2|2|\n"
+        "Final summary\n"
+        "|No.|Result|\n"
+        "|517 Boiarchuk/Estrina|1|\n"
+        "|643 Moroz/Chubay|2|\n"
+        ">\n"
+    ).encode()
+    events, _ = parse_scoresheets_dat(dat)
+    semi = next(e for e in events if e.ranking.rounds[0].round_type == "Semi-final")
+    assert semi.raw_title == "AC- Amateur 5-Dance Champ (C/S)"  # takes the final's spelling
+    assert {m.dance for m in semi.marks} == {"Cha Cha", "Samba"}
+    assert [r.competitor_no for r in semi.ranking.results] == ["626"]
+    assert semi.ranking.results[0].made_final is False
+    assert semi.ranking.rounds[0].recalled_count == 2 and semi.ranking.rounds[0].entries_in == 3

@@ -84,6 +84,7 @@ class CompMngrEventData:
     raw_title: str
     ranking: RankingPage
     marks: list[StagingMark]
+    heat_number: str | None = None  # multi-dance blocks only: ties a round to its event (see parse_scoresheets_dat)
 
 
 def _decode(raw: bytes) -> str:
@@ -503,6 +504,117 @@ def _parse_combined_event_block(block: list[str]) -> CompMngrEventData | None:
 _RULE_SECTION = re.compile(r"^Rule \d+$")
 
 
+_MULTI_DANCE_RECALL_TITLE = re.compile(
+    r"^(?P<title>.*?)\s*(?:-\s*)?(?P<round>Quarter-final|Semi-final)\s*$"
+)
+_HEAT_NUMBER = re.compile(r"^=(?:Pro heat|Heat) (\S+?):")
+
+
+def _parse_multi_dance_recall_block(block: list[str], directory: dict[str, StagingPersonRef]) -> CompMngrEventData | None:
+    """`=Heat N: <title> Quarter-final|Semi-final` -- a multi-dance (e.g.
+    5-Dance Championship) recall round: one marks table per dance, judges'
+    "R" for recalled, and in the last dance's table a "Recall" column saying
+    who goes through. Note the title carries the round WITHOUT the " - "
+    separator regular heat blocks use, which is why _strip_round_suffix
+    never saw it and these rounds used to be skipped, leaving a couple
+    knocked out of a championship with no trace of it.
+
+    Marks keep their dance name (the final's marks do too). Couples not
+    recalled get a made_final=False result, as in _parse_heat_block; none
+    do when nobody is recalled yet (round not tallied)."""
+    header_line = block[1]
+    if not header_line.startswith(("=Heat ", "=Pro heat ")):
+        return None
+    heat = _HEAT_NUMBER.match(header_line)
+    title_match = _MULTI_DANCE_RECALL_TITLE.match(header_line.split(":", 1)[1].strip())
+    if heat is None or title_match is None:
+        return None
+    raw_title, round_type = title_match.group("title").strip(), title_match.group("round")
+
+    id_match = _BLOCK_ID_LIST.match(block[0])
+    candidate_ids = id_match.group(1).split(",") if id_match else []
+
+    sections: list[tuple[str, list[str]]] = []
+    name: str | None = None
+    lines: list[str] = []
+    for line in block[2:-1]:
+        if line.startswith("|"):
+            lines.append(line)
+        elif line.strip():
+            if name is not None:
+                sections.append((name, lines))
+            name, lines = line.strip(), []
+    if name is not None:
+        sections.append((name, lines))
+
+    marks: list[StagingMark] = []
+    couples: dict[str, str] = {}  # bib -> "Lastname/Lastname" abbreviation, in order of appearance
+    recalled_bibs: set[str] = set()
+    saw_recall_column = False
+    for section_name, section_lines in sections:
+        if not any(l.startswith("|") for l in section_lines):
+            continue
+        dance_name = section_name[len("Dance ") :].strip() if section_name.startswith("Dance ") else section_name
+        header, rows = _parse_table_rows(section_lines)
+        judge_numbers: list[str] = []
+        for cell in header[1:]:
+            if re.fullmatch(r"\d{2}", cell):
+                judge_numbers.append(cell)
+            else:
+                break
+        has_recall_column = "Recall" in header
+        saw_recall_column = saw_recall_column or has_recall_column
+        for row in rows:
+            entry_match = _ENTRY_ROW.match(row[0].strip())
+            if not entry_match:
+                continue
+            bib = entry_match.group(1)
+            couples.setdefault(bib, entry_match.group(2))
+            if has_recall_column and row[-1].strip() == "Recall":
+                recalled_bibs.add(bib)
+            for judge_no, cell in zip(judge_numbers, row[1 : 1 + len(judge_numbers)]):
+                marks.append(
+                    StagingMark(
+                        round_label=round_type,
+                        competitor_no=bib,
+                        judge_letter=judge_no,
+                        dance=dance_name,
+                        recalled=(cell.strip() == "R"),
+                        placement=None,
+                    )
+                )
+    if not couples or not saw_recall_column:
+        return None
+
+    entries: list[StagingEntry] = []
+    results: list[StagingResult] = []
+    field_size = len(couples)
+    for bib, names_part in couples.items():
+        abbrev_names = [n.strip() for n in names_part.split("/", 1) if n.strip()]
+        name_parts = _resolve_couple_names(abbrev_names, candidate_ids, directory, set())
+        entries.append(
+            StagingEntry(
+                competitor_no=bib,
+                country=None,
+                partner_1=StagingPersonRef(name=name_parts[0]),
+                partner_2=StagingPersonRef(name=name_parts[1]) if len(name_parts) > 1 else None,
+            )
+        )
+        if recalled_bibs and bib not in recalled_bibs:
+            results.append(
+                StagingResult(competitor_no=bib, placement_low=None, placement_high=None, made_final=False, field_size=field_size)
+            )
+
+    staging_round = StagingRound(
+        round_type=round_type,
+        round_order=_ROUND_RANK[round_type],
+        entries_in=field_size,
+        recalled_count=len(recalled_bibs),
+    )
+    ranking = RankingPage(is_solo=False, rounds=[staging_round], entries=entries, results=results)
+    return CompMngrEventData(raw_title=raw_title, ranking=ranking, marks=marks, heat_number=heat.group(1))
+
+
 def _parse_multi_dance_final_block(block: list[str], directory: dict[str, StagingPersonRef]) -> CompMngrEventData | None:
     """Parse one `=Heat N: <title>` block: a self-contained multi-dance
     final (used when the field was small enough to skip recall rounds
@@ -632,7 +744,10 @@ def _parse_multi_dance_final_block(block: list[str], directory: dict[str, Stagin
 
     staging_round = StagingRound(round_type="final", round_order=_ROUND_RANK["final"], entries_in=field_size, recalled_count=None)
     ranking = RankingPage(is_solo=False, rounds=[staging_round], entries=entries, results=results)
-    return CompMngrEventData(raw_title=raw_title, ranking=ranking, marks=marks)
+    heat = _HEAT_NUMBER.match(header_line)
+    return CompMngrEventData(
+        raw_title=raw_title, ranking=ranking, marks=marks, heat_number=heat.group(1) if heat else None
+    )
 
 
 def parse_scoresheets_dat(
@@ -670,12 +785,27 @@ def parse_scoresheets_dat(
         parsed = (
             _parse_heat_block(block, directory or {})
             or _parse_combined_event_block(block)
+            or _parse_multi_dance_recall_block(block, directory or {})
             or _parse_multi_dance_final_block(block, directory or {})
         )
         if parsed is None:
             skipped += 1
             continue
         events.append(parsed)
+
+    # A multi-dance championship's rounds are titled by the same heat number,
+    # but the organizer's title is not always spelled the same in every round
+    # ("AC-Y Amateur ..." in the quarter-final, "AC- Amateur ..." in the
+    # final). Rounds are merged into one comp_event by title, so a recall
+    # round takes the final's spelling when the final is already on file.
+    final_title_by_heat = {
+        e.heat_number: e.raw_title
+        for e in events
+        if e.heat_number and any(r.round_type == "final" for r in e.ranking.rounds)
+    }
+    for event in events:
+        if event.heat_number and event.heat_number in final_title_by_heat:
+            event.raw_title = final_title_by_heat[event.heat_number]
 
     # Every result of an event reports the event's whole field (its largest
     # round), as NDCA's do -- a couple out in the semi-final is "of 11", not
