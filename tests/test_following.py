@@ -412,3 +412,17 @@ def test_heats_for_followed_people_carries_what_the_detail_views_need(tmp_path):
     assert heats.loc[0, "_source_event_id"] == "ev1"
     assert heats.loc[0, "_followed_names"] == ["U1"]
     assert heats.loc[0, "_comp_end"] == dt.date(2026, 11, 15)
+
+
+def test_dance_order_for_bare_comp_manager_names():
+    import app
+
+    def order(names):
+        return sorted(names, key=app._dance_sort_key_for(set(names)))
+
+    assert order(["Jive", "Samba", "Cha Cha", "Rumba", "Paso Doble"]) == ["Cha Cha", "Samba", "Rumba", "Paso Doble", "Jive"]
+    assert order(["Mambo", "Bolero", "East Coast Swing", "Rumba", "Cha Cha"]) == ["Cha Cha", "Rumba", "East Coast Swing", "Bolero", "Mambo"]
+    assert order(["Quickstep", "Foxtrot", "Viennese Waltz", "Tango", "Waltz"]) == ["Waltz", "Tango", "Viennese Waltz", "Foxtrot", "Quickstep"]
+    assert order(["Viennese Waltz", "Foxtrot", "Tango", "Waltz"]) == ["Waltz", "Tango", "Foxtrot", "Viennese Waltz"]
+    # prefixed names keep their existing order
+    assert order(["Int'l Jive", "Int'l Cha Cha", "Int'l Samba"]) == ["Int'l Cha Cha", "Int'l Samba", "Int'l Jive"]

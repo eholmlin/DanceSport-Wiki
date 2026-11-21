@@ -1412,6 +1412,46 @@ def _dance_sort_key(dance_name: str) -> tuple[int, str]:
     return (len(_DANCE_ORDER), name)
 
 
+# Dances named WITHOUT the "Int'l"/"Amer." prefix (Comp Manager events, e.g.
+# Ohio Star Ball's "Cha Cha", "Samba", ...): Latin first (CC, S, R, PD, J), then
+# Rhythm's extras (CC, R, SW, B, M fall out of the same list), then the
+# ballroom dances (W, T, F, VW -- see _dance_sort_key_for for Standard's W, T, VW, F, Q).
+_BARE_DANCE_ORDER = [
+    "Cha Cha", "Samba", "Rumba", "Paso Doble", "Jive",
+    "East Coast Swing", "Swing", "Bolero", "Mambo",
+    "Waltz", "Tango", "Foxtrot", "Viennese Waltz", "Quickstep",
+]
+
+
+def _dance_sort_key_for(dances):
+    """A sort key for the given set of dance names that puts them in syllabus
+    order whether they carry the "Int'l"/"Amer." prefix (see _DANCE_ORDER) or
+    are bare names. Bare names are judged together: when a Quickstep is
+    present the event is International Standard, whose order is W, T, VW, F, Q
+    rather than American Smooth's W, T, F, VW."""
+    bare_order = list(_BARE_DANCE_ORDER)
+    if any("quickstep" in (d or "").lower() for d in dances):
+        bare_order.remove("Viennese Waltz")
+        bare_order.insert(bare_order.index("Foxtrot"), "Viennese Waltz")
+    by_length = sorted(range(len(bare_order)), key=lambda i: -len(bare_order[i]))
+
+    def key(dance_name: str) -> tuple[int, str]:
+        name = dance_name or ""
+        for i, keyword in enumerate(_DANCE_ORDER):
+            if keyword.lower() in name.lower():
+                return (i, name)
+        lowered = name.strip().lower()
+        for i, bare in enumerate(bare_order):
+            if lowered == bare.lower():
+                return (len(_DANCE_ORDER) + i, name)
+        for i in by_length:  # e.g. "Slow Foxtrot": longest dance name contained wins
+            if bare_order[i].lower() in lowered:
+                return (len(_DANCE_ORDER) + i, name)
+        return (len(_DANCE_ORDER) + len(bare_order), name)
+
+    return key
+
+
 def marks_detail_for_entry(session, entry_id: int, comp_event_id: int) -> pd.DataFrame:
     """One row per (round, dance, judge) mark for one couple in one event --
     the raw material for the round/routine/judge totals below.
@@ -1471,7 +1511,8 @@ def marks_detail_for_entry(session, entry_id: int, comp_event_id: int) -> pd.Dat
         )
     df = pd.DataFrame(out)
     if not df.empty:
-        df["_dance_order"] = df["Dance"].map(lambda d: _dance_sort_key(d))
+        dance_key = _dance_sort_key_for(set(df["Dance"].dropna().unique()))
+        df["_dance_order"] = df["Dance"].map(dance_key)
         df = df.sort_values(["_round_order", "_dance_order", "Judge"]).drop(columns="_dance_order").reset_index(drop=True)
     return df
 
@@ -1562,7 +1603,7 @@ def marks_by_judge_grid(marks_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         return {}
     grids: dict[str, pd.DataFrame] = {}
     for round_name, round_group in non_final.groupby("Round", sort=False):
-        dances = sorted(round_group["Dance"].unique(), key=_dance_sort_key)
+        dances = sorted(round_group["Dance"].unique(), key=_dance_sort_key_for(set(round_group["Dance"].dropna().unique())))
         pivot = round_group.pivot_table(index="Judge", columns="Dance", values="_numeric", aggfunc="first")
         pivot = pivot.reindex(columns=dances).sort_index()
         grid = pivot.map(lambda v: "Y" if v == 1 else "N")
@@ -1899,7 +1940,7 @@ def marks_dance_totals(df: pd.DataFrame, per_dance_skating_placements: dict[str,
         return df
     per_dance_skating_placements = per_dance_skating_placements or {}
     out = []
-    for dance in sorted(df["Dance"].unique(), key=_dance_sort_key):
+    for dance in sorted(df["Dance"].unique(), key=_dance_sort_key_for(set(df["Dance"].dropna().unique()))):
         group = df[df["Dance"] == dance]
         marks_given = group[~group["_is_placement"]]
         marks_str = f"{int(marks_given['_numeric'].sum())}/{len(marks_given)}" if not marks_given.empty else "--"
@@ -1996,7 +2037,7 @@ def marks_by_routine_for_event(session, comp_event_id: int) -> pd.DataFrame:
     if raw.empty:
         return raw
     combos = raw[["_round_order", "Round", "Dance"]].drop_duplicates().copy()
-    combos["_dance_order"] = combos["Dance"].map(_dance_sort_key)
+    combos["_dance_order"] = combos["Dance"].map(_dance_sort_key_for(set(combos["Dance"].dropna().unique())))
     combos["_col"] = combos["Round"] + " - " + combos["Dance"]
     column_order = combos.sort_values(["_round_order", "_dance_order"])["_col"].tolist()
 
